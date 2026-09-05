@@ -12,6 +12,9 @@ dbt-duckdb>=1.8
 pandas>=2.2
 numpy>=1.26
 scikit-learn>=1.4
+# Explicit, though scikit-learn already pulls it in: serve.py imports it directly, and an
+# undeclared transitive dependency breaks the day the parent stops needing it.
+joblib>=1.3
 
 # Serve
 fastapi>=0.110

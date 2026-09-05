@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -194,21 +195,35 @@ def baselines(df: pd.DataFrame) -> list[Result]:
 
 
 # ---------------------------------------------------------------------------- models
+# The full numeric feature set, named once. It was previously spelled out in three places;
+# a served model whose feature list has drifted from the evaluated one is the classic way
+# to ship a score you measured for a model you are not actually running.
+ALL_NUMERIC = TERRAIN_FEATURES + OPERATION_FEATURES + SNOW_FEATURES + BOOLEAN_FEATURES
+ALL_FEATURES = ALL_NUMERIC + CATEGORICAL_FEATURES
+
+
+def gbm() -> HistGradientBoostingRegressor:
+    """The chosen estimator, defined once. Evaluation and serving must use the same one."""
+    return HistGradientBoostingRegressor(
+        max_iter=300, learning_rate=0.06, max_depth=4,
+        l2_regularization=1.0, random_state=SEED)
+
+
+def best_pipeline() -> Pipeline:
+    """The full pipeline the API serves: preprocessing + estimator, in one object."""
+    return build_pipeline(ALL_NUMERIC, CATEGORICAL_FEATURES, gbm())
+
+
 def fit_models(df: pd.DataFrame) -> list[Result]:
     y = df[TARGET]
-    numeric = TERRAIN_FEATURES + OPERATION_FEATURES + SNOW_FEATURES + BOOLEAN_FEATURES
     results = []
 
     results.append(evaluate(
-        build_pipeline(numeric, CATEGORICAL_FEATURES, Ridge(alpha=1.0)),
+        build_pipeline(ALL_NUMERIC, CATEGORICAL_FEATURES, Ridge(alpha=1.0)),
         df, y, "ridge: all features", ""))
 
     results.append(evaluate(
-        build_pipeline(numeric, CATEGORICAL_FEATURES,
-                       HistGradientBoostingRegressor(
-                           max_iter=300, learning_rate=0.06, max_depth=4,
-                           l2_regularization=1.0, random_state=SEED)),
-        df, y, "gradient boosting: all features", ""))
+        best_pipeline(), df, y, "gradient boosting: all features", ""))
 
     return results
 
@@ -235,13 +250,8 @@ def snow_ablation(df: pd.DataFrame) -> list[Result]:
 def feature_importance(df: pd.DataFrame, n_repeats: int = 10) -> pd.DataFrame:
     """Permutation importance on held-out predictions, against the metric we report."""
     y = df[TARGET]
-    numeric = TERRAIN_FEATURES + OPERATION_FEATURES + SNOW_FEATURES + BOOLEAN_FEATURES
-    pipe = build_pipeline(numeric, CATEGORICAL_FEATURES,
-                          HistGradientBoostingRegressor(
-                              max_iter=300, learning_rate=0.06, max_depth=4,
-                              l2_regularization=1.0, random_state=SEED))
-
-    cols = numeric + CATEGORICAL_FEATURES
+    pipe = best_pipeline()
+    cols = ALL_FEATURES
 
     # Pass ONLY the feature columns. permutation_importance shuffles every column of the
     # frame it is given, so handing it the whole mart would produce importances for
@@ -261,6 +271,46 @@ def feature_importance(df: pd.DataFrame, n_repeats: int = 10) -> pd.DataFrame:
                           "std": imp.importances_std})
             .sort_values("importance_eur", ascending=False)
             .reset_index(drop=True))
+
+
+# --------------------------------------------------------------------- the final fit
+MODEL_PATH = Path("models/pricing_model.joblib")
+
+
+def train_final(df: pd.DataFrame, path: Path = MODEL_PATH) -> Path:
+    """Refit the chosen pipeline on ALL model-ready rows and persist it for the API.
+
+    Two things worth being clear about, because they look like contradictions:
+
+    **This model is never scored.** Cross-validation already produced the honest estimate,
+    using models that each held out a fifth of the data. Its purpose was to tell us how well
+    *this recipe* generalises. Having answered that, we throw those five models away and
+    refit on all 422 rows, because more training data makes a better model and there is
+    nothing left to measure it against. Scoring this one on the data it just memorised would
+    produce a beautiful, meaningless number.
+
+    **The metrics the API reports come from CV, not from this fit.** `/model` serves the
+    numbers in metrics.json. Reporting a training score as if it were a generalisation
+    estimate is the single most common way an ML service lies about itself.
+    """
+    import joblib
+
+    pipe = best_pipeline()
+    pipe.fit(df[ALL_FEATURES], df[TARGET])
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Version-stamped, because a pickle is only loadable by a compatible scikit-learn and a
+    # silent version mismatch is a genuinely painful failure to diagnose. Recording what
+    # produced it turns "it crashes on load" into "you are on a different sklearn".
+    import sklearn
+    joblib.dump({
+        "pipeline": pipe,
+        "features": ALL_FEATURES,
+        "target": TARGET,
+        "n_training_rows": int(len(df)),
+        "sklearn_version": sklearn.__version__,
+    }, path)
+    return path
 
 
 # ------------------------------------------------------------------------------- run
@@ -321,6 +371,13 @@ def run(save_to: str | None = None) -> dict:
         with open(save_to, "w") as f:
             json.dump(summary, f, indent=2, default=float)
         print(f"\nSaved -> {save_to}")
+
+        # Refit on everything and persist, so the API has something to serve. Same command,
+        # because the metrics and the artefact must describe the same recipe — running them
+        # separately is how a stale model ends up paired with fresh-looking numbers.
+        path = train_final(df)
+        print(f"Saved -> {path}  (refit on all {len(df)} rows)")
+
     return summary
 
 

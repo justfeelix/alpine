@@ -1,4 +1,4 @@
-.PHONY: setup seed profile weather build model test clean
+.PHONY: setup seed profile weather build model serve verify test clean
 
 setup:
 	pip install -r requirements.txt
@@ -19,6 +19,14 @@ weather:
 model:
 	mkdir -p models
 	python -m alpine.cli model
+
+## Step 10 — the API. --reload picks up edits without a restart; never use it in a container.
+serve:
+	python -m uvicorn alpine.serve:app --reload --port 8000
+
+## Step 10 — end-to-end: prerequisites, then every endpoint against a real server
+verify:
+	bash scripts/verify.sh
 
 test:
 	python -m pytest -q

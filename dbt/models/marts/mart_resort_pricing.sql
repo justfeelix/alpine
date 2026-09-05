@@ -31,6 +31,18 @@ select
     r.continent,
     r.hemisphere,
 
+    -- Carried through for the map in the API layer. Kept even where the coordinates are
+    -- suspect — paired with `coordinates_suspect`, so a consumer can plot them in a
+    -- different colour rather than being handed a NULL and no explanation. The weather
+    -- columns below are NULLed for those rows; the coordinates themselves are the evidence.
+    r.latitude,
+    r.longitude,
+
+    -- 156 names lost a character to the source file's cp1252 encoding (PROFILE.md §2).
+    -- Carried through so a consumer can label them rather than displaying "Uludag?-Bursa"
+    -- as though it were the resort's actual name.
+    r.has_encoding_damage,
+
     -- --------------------------------------------------------------- target
     r.price_eur,
 

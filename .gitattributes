@@ -1,0 +1,15 @@
+# The raw source files are DATA, not text, and git must not touch a byte of them.
+#
+# resorts.csv is cp1252-encoded — that was not a guess, it was established empirically
+# (PROFILE.md §2: byte 0x96 is an en-dash, and latin-1 silently mangles 156 resort names).
+# A file whose exact bytes carry a documented finding is the last file that should be
+# passing through git's line-ending normalisation, which is what produced a phantom
+# "500 insertions, 500 deletions" diff on a file nobody had edited.
+#
+# `-text` disables end-of-line conversion entirely: what is committed is what is on disk.
+data/raw/** -text
+*.csv -text
+
+# Notebooks and pickles: binary, never merge them.
+*.joblib binary
+*.duckdb binary

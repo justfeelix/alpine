@@ -19,27 +19,28 @@ A score with nothing to compare it against is not a result. Three baselines, har
 
 | baseline | MAE (EUR) | R² | |
 |---|---|---|---|
-| predict the global mean | 13.07 ± 1.09 | −0.003 | the floor |
-| predict from terrain alone (ridge) | 10.97 ± 1.14 | 0.356 | size alone gets you a third of the way |
-| **predict the country median** | **8.52 ± 0.73** | **0.546** | **the one that matters** |
+| predict the global mean | 13.10 ± 1.14 | −0.011 | the floor |
+| predict from terrain alone (ridge) | 10.99 ± 0.75 | 0.328 | size alone gets you a third of the way |
+| **predict the country median** | **8.66 ± 0.84** | **0.520** | **the one that matters** |
 
 The country median is a hard baseline on purpose: it is what any person familiar with the
-domain would guess, and it already explains **55% of the variance**.
+domain would guess, and it already explains **52% of the variance**.
 
 ## 2. The models
 
 | model | MAE (EUR) | R² |
 |---|---|---|
-| ridge, all features | 7.78 ± 1.22 | 0.646 |
-| **gradient boosting, all features** | **6.90 ± 0.66** | **0.711** |
+| ridge, all features | 7.68 ± 0.34 | 0.640 |
+| **gradient boosting, all features** | **6.62 ± 1.11** | **0.730** |
 
-The best model beats the best baseline by **EUR 1.62 MAE — a 19% improvement**. Stated that
-way rather than as a bare R², because "0.71" means nothing without knowing that guessing the
-country median already gets you 0.55.
+The best model beats the best baseline by **EUR 2.04 MAE — a 23.6% improvement**. Stated
+that way rather than as a bare R², because "0.73" means nothing without knowing that
+guessing the country median already gets you 0.52.
 
-Note the *spreads*. The GBM's fold-to-fold standard deviation (±0.66) is half the ridge's
-(±1.22) — it is not only more accurate but more stable, which matters more than the mean at
-this sample size.
+Note the *spreads*, and note that they point the other way from the means. The GBM is more
+accurate on average but its fold-to-fold standard deviation (±1.11) is three times the
+ridge's (±0.34) — it is the less stable of the two. At 422 rows that is what a more flexible
+model buys you, and it is the reason "lowest mean score wins" is a bad selection rule.
 
 ---
 
@@ -51,28 +52,30 @@ information helps at all.
 
 | | MAE (EUR) | R² |
 |---|---|---|
-| ridge **without** snow features | **7.69 ± 1.21** | 0.650 |
-| ridge **with** snow features | 7.78 ± 1.22 | 0.646 |
+| ridge **without** snow features | **7.50 ± 0.53** | 0.646 |
+| ridge **with** snow features | 7.68 ± 0.34 | 0.640 |
 
-**Adding snow information makes the model very slightly worse.** The difference is −0.09
-EUR against a fold-to-fold spread of ±1.21, so the honest reading is: **no effect,
+**Adding snow information makes the model very slightly worse.** The difference is −0.18
+EUR against a fold-to-fold spread of ±0.53, so the honest reading is: **no effect,
 indistinguishable from noise.**
 
 Permutation importance says the same thing. Shuffling each feature and measuring the MAE
 lost:
 
-| feature | EUR of MAE lost |
-|---|---|
-| **country** | **4.99** |
-| total_slopes_km | 0.97 |
-| pct_difficult_terrain | 0.87 |
-| highest_point_m | 0.54 |
-| lift_capacity_per_hour | 0.51 |
-| … | |
-| season_snowfall_cm | 0.14 |
+| feature | EUR of MAE lost | ± |
+|---|---|---|
+| **country** | **4.74** | 0.46 |
+| total_slopes_km | 1.12 | 0.31 |
+| gondola_lifts | 0.34 | 0.24 |
+| lift_capacity_per_hour | 0.31 | 0.13 |
+| lowest_point_m | 0.31 | 0.15 |
+| … | | |
+| snow_cover_pct_in_season | 0.13 | 0.14 |
 
-**Country matters five times more than anything else**, and the first snow feature appears
-tenth.
+**Country matters four times more than the next feature and thirty-five times more than
+snow.** The first snow feature appears eleventh — and its importance (0.13) is smaller than
+its own uncertainty (±0.14), which is the formal way of saying it is indistinguishable from
+zero.
 
 ---
 
@@ -110,6 +113,7 @@ Because expensive countries happen to have snowier resorts:
 | Canada | 60.5 | 89.1% |
 | Switzerland | 53.2 | 80.8% |
 | Austria | 44.3 | 76.5% |
+| Italy | 42.6 | 68.2% |
 | France | 39.0 | 68.0% |
 | Germany | 30.0 | 66.7% |
 
@@ -125,7 +129,7 @@ error the pipeline was built to avoid making silently.
 
 ## 5. What actually drives price
 
-1. **Country, overwhelmingly.** Five times the importance of anything else. Lift-pass
+1. **Country, overwhelmingly.** Four times the importance of anything else. Lift-pass
    prices are set by local cost base, wage levels, purchasing power and currency — not by
    mountain conditions.
 2. **Size.** Total piste kilometres, then terrain difficulty mix.
@@ -164,7 +168,7 @@ Honest limitations, in order of how much they matter:
 > and Italy, negative in Switzerland, Austria and Germany. It's Simpson's paradox: the
 > expensive countries happen to be the snowy ones. Once country is controlled for, snow adds
 > nothing — the ablation actually makes the model marginally worse, well inside the
-> fold-to-fold noise. What does predict price is country first, by a factor of five, then
+> fold-to-fold noise. What does predict price is country first, by a factor of four, then
 > size. Which makes economic sense: a resort prices against its local market, not against
 > the weather. Snow probably drives how many passes it sells, and that's demand data I
 > didn't have."*

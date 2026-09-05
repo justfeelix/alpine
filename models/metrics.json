@@ -3,28 +3,28 @@
   "baselines": [
     {
       "name": "baseline: global mean",
-      "mae": 13.09734732226253,
-      "mae_std": 1.1395647470557229,
-      "r2": -0.010904146943393834,
-      "r2_std": 0.012990799962839968,
+      "mae": 13.070516843683729,
+      "mae_std": 2.1716002430489527,
+      "r2": -0.005200424659435621,
+      "r2_std": 0.0036906088578187407,
       "notes": "the floor",
       "extra": {}
     },
     {
       "name": "baseline: country median",
-      "mae": 8.659145658263304,
-      "mae_std": 0.8440395141655073,
-      "r2": 0.5195010693528489,
-      "r2_std": 0.09850244183121834,
+      "mae": 8.679005602240895,
+      "mae_std": 1.3752713965090013,
+      "r2": 0.5286583108185994,
+      "r2_std": 0.0396106560324605,
       "notes": "the one that matters",
       "extra": {}
     },
     {
       "name": "baseline: terrain only (ridge)",
-      "mae": 10.990629732672684,
-      "mae_std": 0.7532771108761686,
-      "r2": 0.32769436675011504,
-      "r2_std": 0.04624398394475503,
+      "mae": 11.245347653625258,
+      "mae_std": 1.5075373427552843,
+      "r2": 0.2913934189715297,
+      "r2_std": 0.08590115792616433,
       "notes": "size alone",
       "extra": {}
     }
@@ -32,19 +32,19 @@
   "models": [
     {
       "name": "ridge: all features",
-      "mae": 7.67579668878111,
-      "mae_std": 0.34392398795489987,
-      "r2": 0.6404704039920773,
-      "r2_std": 0.046684814803624596,
+      "mae": 7.935034413771253,
+      "mae_std": 0.8543782675620786,
+      "r2": 0.6102273397022356,
+      "r2_std": 0.04384786038729061,
       "notes": "",
       "extra": {}
     },
     {
       "name": "gradient boosting: all features",
-      "mae": 6.615860788399502,
-      "mae_std": 1.110478084183912,
-      "r2": 0.7297642071728002,
-      "r2_std": 0.06587169272069153,
+      "mae": 6.915462917239502,
+      "mae_std": 0.9671223054976354,
+      "r2": 0.6959221781378664,
+      "r2_std": 0.06294388409843331,
       "notes": "",
       "extra": {}
     }
@@ -52,74 +52,74 @@
   "snow_ablation": [
     {
       "name": "ridge WITHOUT snow features",
-      "mae": 7.495691002766037,
-      "mae_std": 0.5255347911977195,
-      "r2": 0.6458468574762531,
-      "r2_std": 0.04200014197690008,
+      "mae": 7.846175456409509,
+      "mae_std": 0.885940477908024,
+      "r2": 0.6147971573006631,
+      "r2_std": 0.04045100584040432,
       "notes": "control",
       "extra": {}
     },
     {
       "name": "ridge WITH snow features",
-      "mae": 7.6757966887811095,
-      "mae_std": 0.34392398795490026,
-      "r2": 0.6404704039920771,
-      "r2_std": 0.046684814803624616,
+      "mae": 7.935034413771251,
+      "mae_std": 0.8543782675620778,
+      "r2": 0.6102273397022359,
+      "r2_std": 0.04384786038729072,
       "notes": "treatment",
       "extra": {}
     }
   ],
-  "snow_ablation_mae_delta": -0.18010568601507249,
+  "snow_ablation_mae_delta": -0.08885895736174199,
   "top_features": [
     {
       "feature": "country",
-      "importance_eur": 4.736204740030814,
-      "std": 0.4560777147608637
+      "importance_eur": 5.862013575074699,
+      "std": 0.6048969094847555
     },
     {
       "feature": "total_slopes_km",
-      "importance_eur": 1.116691483771485,
-      "std": 0.31114207813051237
-    },
-    {
-      "feature": "gondola_lifts",
-      "importance_eur": 0.3420270598409186,
-      "std": 0.2436455674562582
-    },
-    {
-      "feature": "lift_capacity_per_hour",
-      "importance_eur": 0.30928775303998346,
-      "std": 0.12994418371199803
-    },
-    {
-      "feature": "lowest_point_m",
-      "importance_eur": 0.3071234239210824,
-      "std": 0.15102230617833454
-    },
-    {
-      "feature": "pct_difficult_terrain",
-      "importance_eur": 0.27029668920279415,
-      "std": 0.25685855150202763
+      "importance_eur": 3.1109771264486703,
+      "std": 0.40211368830203353
     },
     {
       "feature": "highest_point_m",
-      "importance_eur": 0.23769711919802514,
-      "std": 0.14988921334892844
+      "importance_eur": 0.9866909181622452,
+      "std": 0.25142551876066593
     },
     {
-      "feature": "pct_beginner_terrain",
-      "importance_eur": 0.19316629985367628,
-      "std": 0.19819368790383785
+      "feature": "pct_difficult_terrain",
+      "importance_eur": 0.886602400108862,
+      "std": 0.2556833453055559
     },
     {
-      "feature": "piste_km_per_lift",
-      "importance_eur": 0.18845660429668837,
-      "std": 0.13075576541350972
+      "feature": "lift_capacity_per_hour",
+      "importance_eur": 0.8825217179073477,
+      "std": 0.29457993422488765
+    },
+    {
+      "feature": "lowest_point_m",
+      "importance_eur": 0.7906983747684493,
+      "std": 0.24218324137954542
+    },
+    {
+      "feature": "gondola_lifts",
+      "importance_eur": 0.6442754768426404,
+      "std": 0.14143653201405634
     },
     {
       "feature": "season_length_months",
-      "importance_eur": 0.16765688530598463,
-      "std": 0.17215722865734237
+      "importance_eur": 0.3495133925613548,
+      "std": 0.06521112080137477
+    },
+    {
+      "feature": "capacity_per_piste_km",
+      "importance_eur": 0.22219212313333667,
+      "std": 0.10526804895885579
+    },
+    {
+      "feature": "pct_beginner_terrain",
+      "importance_eur": 0.17669627606954547,
+      "std": 0.1592470108073428
     }
   ]
 }
