@@ -21,6 +21,11 @@ def cmd_weather(args):
     print(f"\nraw.weather      {n:>10,} rows")
 
 
+def cmd_model(args):
+    from .model import run
+    run(save_to=args.out)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="alpine",
                                 description="Ski-resort pricing & snow analytics pipeline")
@@ -36,6 +41,10 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--start", default=None, help="YYYY-MM-DD (default 2022-01-01)")
     w.add_argument("--end", default=None, help="YYYY-MM-DD (default 2022-12-31)")
     w.set_defaults(func=cmd_weather)
+
+    m = sub.add_parser("model", help="Baselines, models, and the snow ablation")
+    m.add_argument("--out", default="models/metrics.json")
+    m.set_defaults(func=cmd_model)
     return p
 
 

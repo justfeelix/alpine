@@ -1,4 +1,4 @@
-.PHONY: setup seed profile weather build test clean
+.PHONY: setup seed profile weather build model test clean
 
 setup:
 	pip install -r requirements.txt
@@ -14,6 +14,11 @@ profile:
 ## Step 5 — fetch weather from Open-Meteo for every resort
 weather:
 	python -m alpine.cli weather
+
+## Step 9 — baselines, models, and the snow ablation
+model:
+	mkdir -p models
+	python -m alpine.cli model
 
 test:
 	python -m pytest -q
