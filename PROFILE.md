@@ -166,3 +166,89 @@ computed afterwards. A flagged NULL is honest and lets the model decide.
 > times: the file was cp1252 rather than UTF-8, missing values were encoded as zero — including
 > nine resorts priced at zero that are certainly not free — and the season strings wrap the year
 > boundary, so a naive BETWEEN returns no rows and no error."*
+
+---
+
+# 7. The weather API found a bug in the dataset
+
+*Added after step 5. This was not something the Kaggle files could reveal on their own — it
+took an independent source to see it.*
+
+Open-Meteo returns the **elevation of the grid cell** it served. Comparing that against each
+resort's stated base elevation was meant to be a cheap sanity check. It found something worse
+than expected.
+
+## The signal
+
+| resort | Kaggle coordinates | actual location | error |
+|---|---|---|---|
+| Arapahoe Basin | 40.121, −80.670 | 39.642, −105.872 (Colorado) | **2,144 km** |
+| Wolf Creek | 42.696, −123.395 | 37.472, −106.793 (Colorado) | **1,524 km** |
+| Eldora Mountain | 37.386, −122.073 | 39.937, −105.583 (Colorado) | **1,457 km** |
+| Alta | 42.674, −95.304 | 40.588, −111.638 (Utah) | **1,375 km** |
+| Keystone | 41.999, −92.198 | 39.605, −105.943 (Colorado) | **1,186 km** |
+
+These are **geocoding failures from name collisions**. There is a Keystone in Iowa, an Alta in
+Iowa, an Eldora in California. Whoever built the dataset geocoded resort names and got the
+wrong place — and nothing downstream ever noticed, because a plausible latitude and longitude
+looks exactly like a correct one.
+
+## How to detect it
+
+The tell is the **elevation gap**: source base elevation minus ERA5 grid elevation.
+
+```
+     p05     p25     p50    p75     p95     max
+ -1307.0  -629.0  -162.0    0.0  1150.0  2909.0
+```
+
+**Negative gaps are normal and expected.** ERA5 is a ~25 km grid, so it smooths terrain: a
+cell containing an alpine valley averages *above* the valley floor. Switzerland's mean gap is
+−678 m, which is the physics working correctly, not an error.
+
+**Large positive gaps are the anomaly.** A resort claiming a base 500 m *above* its own grid
+cell is claiming to be on a mountain that the terrain model says isn't there.
+
+| threshold | resorts | reading |
+|---|---|---|
+| gap > 1000 m | **29** | almost certainly wrong coordinates |
+| gap > 500 m | **38** | suspect, worth review |
+
+By country, `gap > 500 m`: **United States 22 of 78 (28%)**, France 6, Japan 2, Germany 2,
+Austria 2, and one each in Chile, Canada, Italy, New Zealand. The concentration in the US is
+consistent with the cause — a large country with many duplicated place names.
+
+## What this changes
+
+**The weather for those 38 resorts describes the wrong place.** Snowfall for a cell in Iowa
+tells you nothing about Alta, Utah. This is not a rounding problem; the data is simply about
+somewhere else.
+
+Decisions:
+
+1. **Flag, don't silently drop.** `dim_resort` gets `elevation_gap_m` and
+   `coordinates_suspect`. Dropping 38 resorts quietly would bias every aggregate afterwards
+   and leave no trace of why.
+2. **Exclude suspect resorts from anything weather-derived.** Snow-reliability metrics built
+   on the wrong location are worse than a NULL, because they look usable.
+3. **Keep them for the price model**, which uses terrain, capacity and country — none of which
+   depend on coordinates being right.
+4. **The threshold is a heuristic**, validated against five resorts whose real locations are
+   independently verifiable. The US cases are unambiguous. The French and Austrian ones may be
+   false positives from genuinely steep terrain, so they are flagged for review rather than
+   treated as certainly wrong.
+
+## Why this is the most useful thing in the profile
+
+Every other finding here came from looking harder at the file. This one was **invisible from
+inside the dataset** — the coordinates are well-formed, in range, and internally consistent.
+It only surfaced by joining against an independent source that happened to carry a fact the
+first source also implies.
+
+That is the general lesson, and it is worth stating plainly:
+
+> *"The coordinates passed every check I could run against the file itself — right type, right
+> range, no nulls, no duplicates. They were still wrong by 2,000 km. I only found it because
+> the weather API returns the elevation of the cell it served, and comparing that to the
+> resort's own stated elevation gave me a second opinion. Validation against an independent
+> source catches a class of error that no amount of internal consistency checking will."*
