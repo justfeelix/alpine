@@ -1,4 +1,4 @@
-.PHONY: setup seed profile weather build model serve verify test clean
+.PHONY: setup seed profile weather build model publish serve verify test clean
 
 setup:
 	pip install -r requirements.txt
@@ -19,6 +19,11 @@ weather:
 model:
 	mkdir -p models
 	python -m alpine.cli model
+
+## Step 11 — freeze the marts into site/data.json so the page works without a backend.
+##            Commit the result: it is what GitHub Pages deploys.
+publish:
+	python -m alpine.cli publish
 
 ## Step 10 — the API. --reload picks up edits without a restart; never use it in a container.
 serve:

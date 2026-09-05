@@ -26,6 +26,12 @@ def cmd_model(args):
     run(save_to=args.out)
 
 
+def cmd_publish(args):
+    from pathlib import Path
+    from .publish import publish
+    publish(out=Path(args.out))
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="alpine",
                                 description="Ski-resort pricing & snow analytics pipeline")
@@ -45,6 +51,10 @@ def build_parser() -> argparse.ArgumentParser:
     m = sub.add_parser("model", help="Baselines, models, and the snow ablation")
     m.add_argument("--out", default="models/metrics.json")
     m.set_defaults(func=cmd_model)
+
+    pub = sub.add_parser("publish", help="Export the marts to site/data.json")
+    pub.add_argument("--out", default="site/data.json")
+    pub.set_defaults(func=cmd_publish)
     return p
 
 

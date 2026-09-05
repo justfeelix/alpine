@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<!--
+  Alpine — ski-resort pricing and snow reliability.
+
+  ====================================================================================
+  ONE PAGE, TWO DATA SOURCES
+  ====================================================================================
+  Everything descriptive renders from `data.json`, exported from the dbt marts by
+  `make publish`. That is what makes GitHub Pages possible: Pages serves static files
+  and will not run Python, so the FastAPI service cannot live there.
+
+  On load the page also probes the relative URL `health`. Served by FastAPI at the
+  origin root that resolves to /health and answers; on Pages it resolves to
+  /alpine/health and 404s. So the same file lights up the interactive prediction form
+  locally and quietly hides it when published. No build step, no second frontend.
+
+  ====================================================================================
+  WHY THE FIRST CHART IS THE WHOLE PROJECT
+  ====================================================================================
+  The finding is a null result — snow reliability does not predict price — and null
+  results are easy to state and hard to believe. The toggle on the first chart is the
+  argument: pooled, the trend line slopes up and snow looks like it matters; split by
+  country, the slopes scatter around zero and two of them point downhill. Nothing about
+  the data changed between those two views. That is Simpson's paradox, and seeing it
+  happen is more convincing than any paragraph claiming it did.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alpine — what drives the price of a ski pass?</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root{
+    --bg:#0a1020; --panel:#111a2e; --panel2:#0e1626; --line:#1e2b45;
+    --text:#e8eefb; --muted:#8ba0c0; --dim:#64789b;
+    --teal:#5eead4; --blue:#60a5fa; --amber:#fbbf24; --red:#f87171; --violet:#a78bfa;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--text);
+    font:15px/1.55 ui-sans-serif,-apple-system,"Segoe UI",Inter,Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--blue)}
+  .wrap{max-width:1180px;margin:0 auto;padding:0 22px}
+  h1,h2,h3{margin:0;font-weight:640;letter-spacing:-.02em}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums}
+
+  /* ---------------------------------------------------------------- header */
+  header{border-bottom:1px solid var(--line);background:linear-gradient(180deg,#0d1524,var(--bg))}
+  .top{display:flex;align-items:center;justify-content:space-between;padding:18px 0}
+  .brand{display:flex;align-items:center;gap:11px;font-weight:700;letter-spacing:-.03em;font-size:19px}
+  .brand svg{display:block}
+  .badge{
+    font-size:11px;font-weight:650;letter-spacing:.09em;text-transform:uppercase;
+    padding:5px 11px;border-radius:100px;border:1px solid var(--line);color:var(--muted);
+    display:inline-flex;align-items:center;gap:7px;
+  }
+  .badge b{width:6px;height:6px;border-radius:50%;background:var(--dim)}
+  .badge.live{color:var(--teal);border-color:#1d4a45;background:#0d201e}
+  .badge.live b{background:var(--teal);box-shadow:0 0 0 3px #5eead422}
+
+  .hero{padding:44px 0 40px;max-width:800px}
+  .eyebrow{color:var(--teal);font-size:12px;font-weight:660;letter-spacing:.13em;text-transform:uppercase;margin-bottom:14px}
+  .hero h1{font-size:clamp(28px,4.4vw,44px);line-height:1.12}
+  .hero .answer{font-size:clamp(28px,4.4vw,44px);line-height:1.12;color:var(--muted);font-weight:640;letter-spacing:-.02em}
+  .hero p{color:var(--muted);font-size:16px;margin:20px 0 0;max-width:660px}
+  .hero p b{color:var(--text);font-weight:620}
+
+  /* ------------------------------------------------------------------ kpis */
+  .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:11px;padding-bottom:34px}
+  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:15px 16px}
+  .kpi .v{font-size:25px;font-weight:680;letter-spacing:-.03em}
+  .kpi .l{color:var(--muted);font-size:11.5px;margin-top:5px;line-height:1.35}
+  .kpi.t .v{color:var(--teal)} .kpi.a .v{color:var(--amber)} .kpi.r .v{color:var(--red)}
+
+  /* --------------------------------------------------------------- sections */
+  section{padding:52px 0;border-top:1px solid var(--line)}
+  .shead{margin-bottom:8px;display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap}
+  .shead h2{font-size:23px}
+  .num{color:var(--dim);font-size:12px;font-weight:660;letter-spacing:.13em;text-transform:uppercase;margin-bottom:9px}
+  .lede{color:var(--muted);max-width:730px;margin:0 0 24px}
+  .lede b{color:var(--text);font-weight:620}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:20px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+
+  /* --------------------------------------------------------------- controls */
+  .seg{display:inline-flex;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:3px;gap:3px}
+  .seg button{
+    background:none;border:0;color:var(--muted);font:inherit;font-size:13px;font-weight:600;
+    padding:7px 15px;border-radius:6px;cursor:pointer;transition:.14s;white-space:nowrap;
+  }
+  .seg button:hover{color:var(--text)}
+  .seg button[aria-selected="true"]{background:#1c2b47;color:var(--text)}
+  input,select{
+    background:var(--panel2);border:1px solid var(--line);color:var(--text);
+    border-radius:8px;padding:9px 11px;font:inherit;font-size:14px;width:100%;
+  }
+  input:focus,select:focus{outline:none;border-color:#33507f}
+  label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:560}
+  button.go{
+    background:var(--teal);color:#04241f;border:0;border-radius:8px;padding:11px 20px;
+    font:inherit;font-weight:680;cursor:pointer;
+  }
+  button.go:disabled{background:#26364f;color:var(--dim);cursor:not-allowed}
+
+  .verdict{
+    display:flex;gap:13px;align-items:flex-start;background:#131f1d;border:1px solid #1d4a45;
+    border-left:3px solid var(--teal);border-radius:10px;padding:15px 17px;margin-top:20px;
+  }
+  .verdict.warn{background:#1e1a12;border-color:#4a3c1d;border-left-color:var(--amber)}
+  .verdict .t{font-weight:660;margin-bottom:4px}
+  .verdict .d{color:var(--muted);font-size:13.5px}
+
+  /* ---------------------------------------------------------------- tables */
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{padding:9px 11px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+  th:first-child,td:first-child{text-align:left}
+  th{
+    color:var(--muted);font-weight:620;font-size:11.5px;text-transform:uppercase;
+    letter-spacing:.05em;cursor:pointer;user-select:none;position:sticky;top:0;background:var(--panel);
+  }
+  th:hover{color:var(--text)}
+  th.on{color:var(--teal)}
+  tbody tr:hover{background:#16223a}
+  .scroll{max-height:460px;overflow:auto;border:1px solid var(--line);border-radius:11px;background:var(--panel)}
+  .pos{color:var(--amber)} .neg{color:var(--blue)}
+  .tag{font-size:10.5px;padding:2px 7px;border-radius:5px;background:#1e2b45;color:var(--muted);margin-left:6px}
+  .tag.bad{background:#2c1a1a;color:var(--red)}
+
+  #map{height:440px;border-radius:12px;border:1px solid var(--line);background:var(--panel2)}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;color:var(--muted);font-size:12.5px;margin-top:13px}
+  .legend i{width:11px;height:11px;border-radius:50%;display:inline-block;margin-right:6px;vertical-align:-1px}
+
+  .foot{color:var(--dim);font-size:12.5px;padding:34px 0 60px;border-top:1px solid var(--line);line-height:1.75}
+  .foot b{color:var(--muted);font-weight:600}
+  .stack{display:grid;gap:13px}
+  .note{color:var(--dim);font-size:12.5px;margin-top:12px}
+  canvas{max-width:100%}
+  @media(max-width:900px){
+    .kpis{grid-template-columns:repeat(2,1fr)} .grid2{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="top">
+      <div class="brand">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+          <path d="M2 20h20L14.5 5 11 12l-2.2-3.6L2 20Z" fill="#5eead4" opacity=".92"/>
+          <path d="M11.6 10.9 14.5 5l3.1 6.2-2.4 1.1-1.6-2.1-1.9 1.6-.1-.9Z" fill="#0a1020" opacity=".5"/>
+        </svg>
+        Alpine
+      </div>
+      <div class="badge" id="mode"><b></b><span>loading</span></div>
+    </div>
+
+    <div class="hero">
+      <div class="eyebrow">ELT pipeline · 499 resorts · 3 sources</div>
+      <h1>Does snow reliability command a price premium?</h1>
+      <div class="answer" id="answer">Measuring&hellip;</div>
+      <p id="heroSub">
+        An end-to-end pipeline over a Kaggle resort dataset, NASA satellite snow cover and
+        the Open-Meteo weather archive &mdash; extracted, tested in dbt, and modelled to
+        answer one question honestly.
+      </p>
+    </div>
+
+    <div class="kpis" id="kpis"></div>
+  </div>
+</header>
+
+<main class="wrap">
+
+<!-- ================================================================ THE FINDING -->
+<section>
+  <div class="num">01 · the finding</div>
+  <div class="shead">
+    <h2>The premium that disappears when you look closer</h2>
+    <div class="seg" role="tablist" id="paradoxToggle">
+      <button role="tab" data-mode="pooled" aria-selected="true">All resorts pooled</button>
+      <button role="tab" data-mode="country" aria-selected="false">Split by country</button>
+    </div>
+  </div>
+  <p class="lede" id="paradoxLede">
+    Every model-ready resort, snow cover against price. <b>Use the toggle</b> &mdash; the
+    underlying points never move, only how they are grouped.
+  </p>
+  <div class="card"><canvas id="scatter" height="150"></canvas></div>
+  <div id="paradoxVerdict"></div>
+  <div class="note" id="slopeNote"></div>
+</section>
+
+<!-- ============================================================ WHAT DRIVES PRICE -->
+<section>
+  <div class="num">02 · attribution</div>
+  <div class="shead"><h2>What actually drives price</h2></div>
+  <p class="lede">
+    Permutation importance: shuffle one feature until it is noise, and measure how many
+    euros of accuracy the model loses. <b>A feature whose destruction costs nothing was
+    never being used.</b>
+  </p>
+  <div class="grid2">
+    <div class="card"><div id="importance"></div></div>
+    <div class="card">
+      <h3 style="font-size:15px;margin-bottom:6px">Does adding snow data help?</h3>
+      <div style="color:var(--muted);font-size:13.5px;margin-bottom:18px">
+        The same model trained twice on identical rows &mdash; once with the five snow
+        columns, once without. Bars show the cross-validated error; the whiskers are the
+        fold-to-fold spread.
+      </div>
+      <div id="ablation"></div>
+      <div id="ablationVerdict"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ====================================================================== MAP -->
+<section>
+  <div class="num">03 · the data</div>
+  <div class="shead">
+    <h2>Where they are &mdash; and where the source is wrong</h2>
+    <div class="seg" id="mapToggle">
+      <button data-c="price" aria-selected="true">Colour by price</button>
+      <button data-c="snow" aria-selected="false">Colour by snow</button>
+    </div>
+  </div>
+  <p class="lede">
+    <b>38 resorts have coordinates pointing somewhere else entirely.</b> Found by
+    cross-checking each stated base elevation against the elevation of its ERA5 weather
+    cell &mdash; an error invisible to any check run against the source file alone. Their
+    weather columns are set to NULL rather than quietly describing the wrong mountain.
+  </p>
+  <div id="map"></div>
+  <div class="legend" id="mapLegend"></div>
+</section>
+
+<!-- ================================================================= COUNTRIES -->
+<section>
+  <div class="num">04 · by country</div>
+  <div class="shead"><h2>Price and snow, side by side</h2></div>
+  <p class="lede">
+    The confound in one table. The expensive countries happen to be the snowy ones, which
+    is exactly why snow looked like it mattered before country was controlled for.
+  </p>
+  <div class="scroll"><table id="countryTable"></table></div>
+</section>
+
+<!-- =================================================================== PREDICT -->
+<section>
+  <div class="num">05 · the model</div>
+  <div class="shead"><h2>Price a resort</h2></div>
+  <p class="lede" id="predictLede">
+    Gradient boosting over terrain, lift infrastructure, season and country.
+    <b>Only country is required</b> &mdash; the pipeline's imputer fills anything you leave
+    blank with the median it saw in training.
+  </p>
+  <div class="grid2">
+    <div class="card">
+      <div class="stack" style="grid-template-columns:1fr 1fr;display:grid">
+        <div><label for="f_country">Country</label><select id="f_country"></select></div>
+        <div><label for="f_slopes">Total slopes (km)</label><input id="f_slopes" type="number" value="120"></div>
+        <div><label for="f_drop">Vertical drop (m)</label><input id="f_drop" type="number" value="1200"></div>
+        <div><label for="f_high">Highest point (m)</label><input id="f_high" type="number" value="2500"></div>
+        <div><label for="f_lifts">Total lifts</label><input id="f_lifts" type="number" value="30"></div>
+        <div><label for="f_snow">Snow cover in season (%)</label><input id="f_snow" type="number" value="80"></div>
+      </div>
+      <div style="margin-top:17px;display:flex;gap:12px;align-items:center">
+        <button class="go" id="predictBtn" disabled>Predict</button>
+        <span style="color:var(--dim);font-size:12.5px" id="predictHint"></span>
+      </div>
+    </div>
+    <div class="card" id="predictOut" style="display:flex;align-items:center;justify-content:center;min-height:190px">
+      <span style="color:var(--dim);font-size:13.5px">Awaiting input</span>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================== EXPLORER -->
+<section>
+  <div class="num">06 · explore</div>
+  <div class="shead"><h2>Every resort</h2></div>
+  <p class="lede">
+    <b>Residual</b> is actual minus predicted &mdash; the part of the price the mountain does
+    not explain. Sort by it to find the resorts charging most above what their terrain,
+    country and snow would suggest.
+  </p>
+  <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px;margin-bottom:14px">
+    <div><label for="q">Search</label><input id="q" placeholder="Resort name&hellip;"></div>
+    <div><label for="fc">Country</label><select id="fc"></select></div>
+    <div><label for="fr">Rows</label><select id="fr">
+      <option value="all">All 499</option>
+      <option value="ready" selected>Model-ready only (422)</option>
+      <option value="suspect">Suspect coordinates (38)</option>
+      <option value="noprice">No price in source (9)</option>
+    </select></div>
+  </div>
+  <div class="scroll"><table id="resortTable"></table></div>
+  <div class="note" id="explorerNote"></div>
+</section>
+
+</main>
+
+<div class="wrap">
+  <div class="foot">
+    <b>Pipeline</b> &nbsp;Kaggle CSV (cp1252) + NASA NEO snow raster + Open-Meteo ERA5
+    &rarr; DuckDB raw &rarr; dbt staging / intermediate / marts (11 models, 90 data tests)
+    &rarr; scikit-learn &rarr; FastAPI &rarr; this page.<br>
+    <b>Honest limits</b> &nbsp;One season of snow (2022) is closer to weather than to
+    climate. List price only &mdash; no occupancy, discounting or realised revenue. Source
+    currency undocumented; EUR assumed.<br>
+    <span id="stamp"></span>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script>
+(async function(){
+"use strict";
+
+const $ = s => document.querySelector(s);
+const fmt = (v,d=1) => v==null||Number.isNaN(v) ? "—" : Number(v).toFixed(d);
+const eur = v => v==null ? "—" : "€"+Number(v).toFixed(0);
+
+// Palette for the by-country view. Ordered so the two countries whose snow premium is
+// most negative (Germany, Switzerland) get visually distinct colours from the positive
+// ones — the point of the chart is that the slopes disagree, so they must be tellable apart.
+const CC = ["#5eead4","#60a5fa","#fbbf24","#f87171","#a78bfa","#34d399","#fb923c","#f472b6"];
+
+// ------------------------------------------------------------------ load + mode
+let D;
+try {
+  D = await (await fetch("data.json",{cache:"no-cache"})).json();
+} catch (e) {
+  document.body.innerHTML = '<div class="wrap" style="padding:70px 22px">'+
+    '<h1>No data bundle</h1><p style="color:#8ba0c0">'+
+    'Run <code>make publish</code> to export <code>site/data.json</code> from the warehouse.</p></div>';
+  return;
+}
+
+// Probe for a live API. Relative URL on purpose: served by FastAPI this hits /health,
+// on GitHub Pages it hits /<repo>/health and 404s. The failure IS the signal.
+let LIVE = false;
+try {
+  const r = await fetch("health",{cache:"no-store"});
+  LIVE = r.ok && (await r.json()).model_loaded === true;
+} catch(e){ LIVE = false; }
+
+const badge = $("#mode");
+badge.className = "badge" + (LIVE ? " live" : "");
+badge.querySelector("span").textContent = LIVE ? "Live API" : "Static snapshot";
+
+const M = D.metrics;
+const ready = D.resorts.filter(r => r.is_model_ready);
+
+// -------------------------------------------------------------------- headline
+const bestBase  = M.baselines.reduce((a,b)=> a.mae<b.mae ? a : b);
+const bestModel = M.models.reduce((a,b)=> a.mae<b.mae ? a : b);
+const abl = Object.fromEntries(M.snow_ablation.map(r=>[r.name,r]));
+const without = abl["ridge WITHOUT snow features"], withSnow = abl["ridge WITH snow features"];
+const delta = M.snow_ablation_mae_delta;
+const significant = Math.abs(delta) > without.mae_std;
+
+$("#answer").innerHTML = significant
+  ? "Yes &mdash; and here is how much."
+  : "No. It is entirely explained by <span style='color:#e8eefb'>which country</span> the resort is in.";
+
+// Pooled vs within-country premium, computed here rather than hardcoded, so the page
+// cannot claim a finding the shipped data no longer supports.
+const HI = 80;
+const mean = a => a.reduce((s,x)=>s+x,0)/a.length;
+const pooledHi = ready.filter(r=>r.snow_cover_pct_in_season>=HI).map(r=>r.price_eur);
+const pooledLo = ready.filter(r=>r.snow_cover_pct_in_season< HI).map(r=>r.price_eur);
+const pooledGap = mean(pooledHi)-mean(pooledLo);
+
+$("#kpis").innerHTML = [
+  ["", D.counts.resorts, "resorts extracted<br>from 3 sources"],
+  ["", D.counts.model_ready, "model-ready after<br>quality gates"],
+  // Two decimals here, not the rounded eur() used elsewhere. "€7" would throw away the
+  // precision that makes the number meaningful — the whole claim is that the model lands
+  // within a couple of euro, and €6.62 vs €8.66 is the comparison being made.
+  ["t", "€"+bestModel.mae.toFixed(2), "average error<br>(5-fold CV)"],
+  ["a", (100*(bestBase.mae-bestModel.mae)/bestBase.mae).toFixed(1)+"%", "better than guessing<br>the country median"],
+  ["r", (delta>=0?"+€":"−€")+Math.abs(delta).toFixed(2), "effect of adding<br>all snow features"],
+].map(([c,v,l])=>`<div class="kpi ${c}"><div class="v">${v}</div><div class="l">${l}</div></div>`).join("");
+
+$("#stamp").innerHTML = `<b>Snapshot</b> &nbsp;${new Date(D.generated_at).toUTCString()}
+  &nbsp;·&nbsp; ${D.model_note} &nbsp;·&nbsp; ${D.counts.suspect_coordinates} resorts excluded
+  for suspect coordinates, ${D.counts.encoding_damaged} names damaged by the source encoding.`;
+
+// =========================================================== 01 · paradox chart
+// Ordinary least squares. Written out rather than pulled from a library because it is
+// four lines and the slope is the entire argument of this section — it should be
+// inspectable, not delegated.
+function slope(pts){
+  const n=pts.length; if(n<3) return null;
+  const mx=mean(pts.map(p=>p.x)), my=mean(pts.map(p=>p.y));
+  let num=0, den=0;
+  for(const p of pts){ num+=(p.x-mx)*(p.y-my); den+=(p.x-mx)**2; }
+  if(den===0) return null;
+  const b=num/den; return {b, a:my-b*mx};
+}
+function lineFor(pts){
+  const f=slope(pts); if(!f) return null;
+  const xs=pts.map(p=>p.x), lo=Math.min(...xs), hi=Math.max(...xs);
+  return [{x:lo,y:f.a+f.b*lo},{x:hi,y:f.a+f.b*hi}];
+}
+
+const byCountry = {};
+for(const r of ready){
+  if(r.snow_cover_pct_in_season==null||r.price_eur==null) continue;
+  (byCountry[r.country] ||= []).push({x:r.snow_cover_pct_in_season,y:r.price_eur,n:r.resort_name});
+}
+const topCountries = Object.entries(byCountry)
+  .filter(([,v])=>v.length>=15).sort((a,b)=>b[1].length-a[1].length)
+  .slice(0,7).map(([k])=>k);
+const allPts = ready.filter(r=>r.snow_cover_pct_in_season!=null&&r.price_eur!=null)
+  .map(r=>({x:r.snow_cover_pct_in_season,y:r.price_eur,n:r.resort_name,c:r.country}));
+
+const axes = {
+  x:{title:{display:true,text:"Snow cover during the resort's own season (%)",color:"#8ba0c0"},
+     grid:{color:"#1a2740"},ticks:{color:"#64789b"}},
+  y:{title:{display:true,text:"Lift-pass price (EUR)",color:"#8ba0c0"},
+     grid:{color:"#1a2740"},ticks:{color:"#64789b",callback:v=>"€"+v}}
+};
+
+const chart = new Chart($("#scatter"), {
+  type:"scatter",
+  options:{
+    responsive:true, animation:{duration:420}, scales:axes,
+    plugins:{
+      legend:{display:false},
+      tooltip:{callbacks:{label:c=>{
+        const p=c.raw; return p.n ? `${p.n} — €${p.y}, ${p.x.toFixed(0)}% snow` : "";
+      }}}
+    }
+  },
+  data:{datasets:[]}
+});
+
+function renderParadox(mode){
+  let sets=[], note="";
+  if(mode==="pooled"){
+    sets=[
+      {data:allPts,backgroundColor:"#60a5fa66",pointRadius:3.6,pointHoverRadius:6},
+      {data:lineFor(allPts),type:"line",borderColor:"#fbbf24",borderWidth:2.5,
+       pointRadius:0,borderDash:[7,4],tooltip:{enabled:false}}
+    ];
+    const s=slope(allPts).b;
+    note=`Pooled trend: <b style="color:#fbbf24">${s>0?"+":""}€${s.toFixed(2)} per extra
+      percentage point of snow cover</b>. Resorts above ${HI}% cover average
+      €${mean(pooledHi).toFixed(2)} against €${mean(pooledLo).toFixed(2)} below it
+      &mdash; a €${pooledGap.toFixed(2)} gap, about
+      ${(100*pooledGap/mean(pooledLo)).toFixed(0)}%. Convincing, and wrong.`;
+    $("#paradoxVerdict").innerHTML = `<div class="verdict warn"><div>
+      <div class="t">Pooled, snow looks like it matters</div>
+      <div class="d">One upward line through 422 resorts from seven countries. The obvious
+      reading is that snowier resorts charge more.</div></div></div>`;
+  } else {
+    const slopes=[];
+    topCountries.forEach((c,i)=>{
+      const pts=byCountry[c], col=CC[i%CC.length];
+      sets.push({data:pts,backgroundColor:col+"66",pointRadius:3.6,pointHoverRadius:6,label:c});
+      const ln=lineFor(pts);
+      if(ln){ sets.push({data:ln,type:"line",borderColor:col,borderWidth:2.5,pointRadius:0,label:c}); }
+      const s=slope(pts); if(s) slopes.push([c,s.b]);
+    });
+    slopes.sort((a,b)=>b[1]-a[1]);
+    const up=slopes.filter(s=>s[1]>0).length;
+    note="Within-country slopes: "+slopes.map(([c,b])=>
+      `<b style="color:${b>0?'#fbbf24':'#60a5fa'}">${c} ${b>0?"+":""}${b.toFixed(2)}</b>`).join(" · ")+
+      ` &nbsp;— ${up} positive, ${slopes.length-up} negative.`;
+    $("#paradoxVerdict").innerHTML = `<div class="verdict"><div>
+      <div class="t">Split by country, the premium changes sign</div>
+      <div class="d">Same 422 points, same axes &mdash; only the grouping changed. The
+      slopes disagree: positive in some countries, negative in others. There is no
+      consistent within-country effect, and the pooled line was an artefact of expensive
+      countries happening to be snowy ones. <b style="color:#e8eefb">This is Simpson's
+      paradox</b>, and it is the error the whole pipeline was built to avoid making
+      silently.</div></div></div>`;
+  }
+  chart.data.datasets=sets; chart.update();
+  $("#slopeNote").innerHTML=note;
+}
+$("#paradoxToggle").addEventListener("click",e=>{
+  const b=e.target.closest("button"); if(!b) return;
+  [...e.currentTarget.children].forEach(x=>x.setAttribute("aria-selected",x===b));
+  renderParadox(b.dataset.mode);
+});
+renderParadox("pooled");
+
+// ====================================================== 02 · importance + ablation
+// Hand-drawn SVG rather than a chart library. Both of these need an error bar sitting on
+// the value, and the comparison the reader must make is "do the whiskers overlap?" —
+// which is easier to draw correctly than to talk a charting library into.
+function importanceSVG(feats){
+  const W=520,rowH=30,pad=150,max=Math.max(...feats.map(f=>f.importance_eur+f.std));
+  const x=v=>pad+(v/max)*(W-pad-30);
+  return `<svg viewBox="0 0 ${W} ${feats.length*rowH+34}" width="100%">
+    ${feats.map((f,i)=>{
+      const y=i*rowH+16, isSnow=/snow|freezing|temp/.test(f.feature);
+      const col=i===0?"#5eead4":isSnow?"#f87171":"#60a5fa";
+      return `
+      <text x="${pad-10}" y="${y+13}" text-anchor="end" fill="${isSnow?'#f87171':'#8ba0c0'}"
+            font-size="11.5" font-family="ui-monospace,monospace">${f.feature}</text>
+      <rect x="${pad}" y="${y+3}" width="${Math.max(x(f.importance_eur)-pad,1)}" height="15"
+            rx="3" fill="${col}" opacity="${i===0?.95:.72}"/>
+      <line x1="${x(Math.max(f.importance_eur-f.std,0))}" x2="${x(f.importance_eur+f.std)}"
+            y1="${y+10.5}" y2="${y+10.5}" stroke="#e8eefb" stroke-width="1.2" opacity=".55"/>
+      <text x="${x(f.importance_eur+f.std)+7}" y="${y+14}" fill="#8ba0c0" font-size="11"
+            font-family="ui-monospace,monospace">€${f.importance_eur.toFixed(2)}</text>`;
+    }).join("")}
+    <text x="${pad}" y="${feats.length*rowH+28}" fill="#64789b" font-size="10.5">
+      euros of accuracy lost when the feature is shuffled — whisker is ± 1 sd over 10 repeats</text>
+  </svg>`;
+}
+const feats = M.top_features.slice(0,8);
+$("#importance").innerHTML =
+  `<h3 style="font-size:15px;margin-bottom:14px">Feature importance</h3>`+importanceSVG(feats);
+
+function ablationSVG(){
+  const rows=[["without snow features",without],["with snow features",withSnow]];
+  const W=520,pad=168;
+  const lo=Math.min(...rows.map(([,r])=>r.mae-r.mae_std))-.35;
+  const hi=Math.max(...rows.map(([,r])=>r.mae+r.mae_std))+.35;
+  const x=v=>pad+((v-lo)/(hi-lo))*(W-pad-34);
+  return `<svg viewBox="0 0 ${W} 150" width="100%">
+    ${rows.map(([lab,r],i)=>{
+      const y=i*54+14, col=i===0?"#60a5fa":"#a78bfa";
+      return `
+      <text x="${pad-10}" y="${y+20}" text-anchor="end" fill="#8ba0c0" font-size="12">${lab}</text>
+      <rect x="${x(r.mae-r.mae_std)}" y="${y+6}" width="${x(r.mae+r.mae_std)-x(r.mae-r.mae_std)}"
+            height="26" rx="4" fill="${col}" opacity=".22"/>
+      <line x1="${x(r.mae)}" x2="${x(r.mae)}" y1="${y+3}" y2="${y+35}" stroke="${col}" stroke-width="3"/>
+      <text x="${x(r.mae)+9}" y="${y+24}" fill="#e8eefb" font-size="12.5"
+            font-family="ui-monospace,monospace">€${r.mae.toFixed(2)}</text>`;
+    }).join("")}
+    <text x="${pad}" y="132" fill="#64789b" font-size="10.5">
+      bar = mean absolute error · band = ± 1 sd across the 5 folds</text>
+  </svg>`;
+}
+$("#ablation").innerHTML = ablationSVG();
+$("#ablationVerdict").innerHTML = `<div class="verdict ${significant?"warn":""}"><div>
+  <div class="t">${significant
+    ? "Snow features improve the model"
+    : "The bands overlap — no measurable effect"}</div>
+  <div class="d">Adding all five snow features changes error by
+    <b style="color:#e8eefb">€${delta.toFixed(2)}</b>, against a fold-to-fold spread of
+    ±€${without.mae_std.toFixed(2)}. ${significant ? "" :
+    "A difference smaller than the noise the measurement already has is not a difference. \
+     The honest conclusion is not that snow hurts — it is that the model learned \
+     nothing from being told how snowy a resort is."}</div></div></div>`;
+
+// ============================================================== 03 · map
+const withCoords = D.resorts.filter(r=>r.latitude!=null&&r.longitude!=null);
+const map = L.map("map",{scrollWheelZoom:false}).setView([46.6,10.5],4);
+L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",{
+  attribution:'&copy; OpenStreetMap &copy; CARTO', maxZoom:12
+}).addTo(map);
+
+const prices = withCoords.map(r=>r.price_eur).filter(v=>v!=null).sort((a,b)=>a-b);
+const qtile = p => prices[Math.floor(p*(prices.length-1))];
+const priceColor = v => v==null?"#64789b" : v<qtile(.25)?"#60a5fa" : v<qtile(.5)?"#5eead4"
+                      : v<qtile(.75)?"#fbbf24" : "#f87171";
+const snowColor  = v => v==null?"#64789b" : v<50?"#f87171" : v<70?"#fbbf24"
+                      : v<85?"#5eead4" : "#60a5fa";
+let layer=null;
+function drawMap(by){
+  if(layer) map.removeLayer(layer);
+  layer = L.layerGroup(withCoords.map(r=>{
+    const bad = r.coordinates_suspect;
+    const col = bad ? "#f87171"
+      : (by==="price" ? priceColor(r.price_eur) : snowColor(r.snow_cover_pct_in_season));
+    return L.circleMarker([r.latitude,r.longitude],{
+      radius: bad?5:4, color: bad?"#f87171":col, weight: bad?1.8:0.6,
+      fillColor:col, fillOpacity: bad?.15:.72
+    }).bindPopup(
+      `<b>${r.resort_name}</b><br>${r.country}<br>`+
+      `Price ${eur(r.price_eur)} · Snow ${fmt(r.snow_cover_pct_in_season,0)}%<br>`+
+      `${r.predicted_price_eur!=null?`Model says ${eur(r.predicted_price_eur)}<br>`:""}`+
+      (bad?`<span style="color:#b91c1c"><b>Suspect coordinates</b> — weather NULLed</span>`:"")
+    );
+  })).addTo(map);
+}
+drawMap("price");
+$("#mapToggle").addEventListener("click",e=>{
+  const b=e.target.closest("button"); if(!b) return;
+  [...e.currentTarget.children].forEach(x=>x.setAttribute("aria-selected",x===b));
+  drawMap(b.dataset.c);
+  $("#mapLegend").innerHTML = legendFor(b.dataset.c);
+});
+const legendFor = by => (by==="price"
+  ? [["#60a5fa","cheapest 25%"],["#5eead4","25–50%"],["#fbbf24","50–75%"],["#f87171","most expensive 25%"]]
+  : [["#f87171","under 50% cover"],["#fbbf24","50–70%"],["#5eead4","70–85%"],["#60a5fa","over 85%"]]
+ ).map(([c,l])=>`<span><i style="background:${c}"></i>${l}</span>`).join("")
+ + `<span><i style="background:transparent;border:1.5px solid #f87171"></i>suspect coordinates (hollow)</span>`;
+$("#mapLegend").innerHTML = legendFor("price");
+
+// ================================================== generic sortable table helper
+function sortable(el, cols, rows, initial, dir){
+  let key=initial, desc=dir!==false;
+  function draw(){
+    const sorted=[...rows].sort((a,b)=>{
+      const x=a[key], y=b[key];
+      if(x==null) return 1; if(y==null) return -1;
+      return (typeof x==="string" ? x.localeCompare(y) : x-y) * (desc?-1:1);
+    });
+    el.innerHTML =
+      `<thead><tr>${cols.map(c=>
+        `<th data-k="${c.k}" class="${c.k===key?"on":""}">${c.t}${c.k===key?(desc?" ↓":" ↑"):""}</th>`
+      ).join("")}</tr></thead><tbody>${
+        sorted.slice(0,400).map(r=>`<tr>${cols.map(c=>`<td>${c.f(r)}</td>`).join("")}</tr>`).join("")
+      }</tbody>`;
+    el.querySelectorAll("th").forEach(th=>th.onclick=()=>{
+      const k=th.dataset.k; if(k===key) desc=!desc; else {key=k;desc=true;} draw();
+    });
+  }
+  draw();
+  return { update(newRows){ rows=newRows; draw(); }, count:()=>rows.length };
+}
+
+// ====================================================== 04 · countries
+sortable($("#countryTable"), [
+  {k:"country",t:"Country",f:r=>r.country},
+  {k:"n_resorts",t:"Resorts",f:r=>r.n_resorts},
+  {k:"n_model_ready",t:"Model-ready",f:r=>r.n_model_ready},
+  {k:"avg_price_eur",t:"Avg price",f:r=>`<span class="mono">${eur(r.avg_price_eur)}</span>`},
+  {k:"median_price_eur",t:"Median",f:r=>`<span class="mono">${eur(r.median_price_eur)}</span>`},
+  {k:"avg_snow_cover_pct",t:"Avg snow cover",f:r=>`<span class="mono">${fmt(r.avg_snow_cover_pct,1)}%</span>`},
+  {k:"avg_slopes_km",t:"Avg slopes",f:r=>`<span class="mono">${fmt(r.avg_slopes_km,0)} km</span>`},
+], D.countries, "avg_price_eur");
+
+// ====================================================== 05 · predict
+const countries=[...new Set(D.resorts.map(r=>r.country))].sort();
+$("#f_country").innerHTML = countries.map(c=>`<option${c==="Austria"?" selected":""}>${c}</option>`).join("");
+$("#fc").innerHTML = `<option value="">All countries</option>`+countries.map(c=>`<option>${c}</option>`).join("");
+
+if(LIVE){
+  $("#predictBtn").disabled=false;
+  $("#predictHint").textContent="POST /predict";
+  $("#predictBtn").onclick=async()=>{
+    const body={
+      country:$("#f_country").value,
+      total_slopes_km:+$("#f_slopes").value||null,
+      vertical_drop_m:+$("#f_drop").value||null,
+      highest_point_m:+$("#f_high").value||null,
+      total_lifts:+$("#f_lifts").value||null,
+      snow_cover_pct_in_season:+$("#f_snow").value||null,
+    };
+    $("#predictOut").innerHTML=`<span style="color:var(--dim)">Predicting…</span>`;
+    try{
+      const r=await fetch("predict",{method:"POST",headers:{"Content-Type":"application/json"},
+                                     body:JSON.stringify(body)});
+      const d=await r.json();
+      if(!r.ok) throw new Error(JSON.stringify(d.detail));
+      $("#predictOut").innerHTML=`<div style="text-align:center">
+        <div style="color:var(--muted);font-size:12.5px;text-transform:uppercase;letter-spacing:.09em">
+          Predicted day pass</div>
+        <div style="font-size:56px;font-weight:700;letter-spacing:-.04em;color:var(--teal);line-height:1.15">
+          €${d.predicted_price_eur.toFixed(2)}</div>
+        <div style="color:var(--muted);font-size:13.5px">
+          ± €${d.expected_error_eur.toFixed(2)} typical error<br>
+          <span style="color:var(--dim);font-size:12px">${d.basis}</span></div></div>`;
+    }catch(e){
+      $("#predictOut").innerHTML=`<span style="color:var(--red);font-size:13px">${e.message}</span>`;
+    }
+  };
+} else {
+  // Static mode. Rather than a dead button, say exactly why and what to run — a disabled
+  // control with no explanation is the most annoying thing a published demo can do.
+  $("#predictHint").innerHTML="";
+  $("#predictOut").innerHTML=`<div style="text-align:center;max-width:330px">
+    <div style="font-size:26px;margin-bottom:10px">\u{1F512}</div>
+    <div style="font-weight:640;margin-bottom:7px">Needs the live API</div>
+    <div style="color:var(--muted);font-size:13.5px;line-height:1.6">
+      GitHub Pages serves static files and cannot run the model. Clone the repo and run
+      <code style="color:var(--teal)">make serve</code> — this same page, served by
+      FastAPI, detects the API and unlocks this panel.</div></div>`;
+}
+
+// ====================================================== 06 · explorer
+const hasPred = D.resorts.some(r=>r.predicted_price_eur!=null);
+const cols=[
+  {k:"resort_name",t:"Resort",f:r=>`${r.resort_name}${
+      r.has_encoding_damage?'<span class="tag bad" title="name damaged by source encoding">enc</span>':""}${
+      r.coordinates_suspect?'<span class="tag bad" title="coordinates point elsewhere">geo</span>':""}`},
+  {k:"country",t:"Country",f:r=>r.country},
+  {k:"price_eur",t:"Price",f:r=>`<span class="mono">${eur(r.price_eur)}</span>`},
+  ...(hasPred?[
+    {k:"predicted_price_eur",t:"Model",f:r=>`<span class="mono">${eur(r.predicted_price_eur)}</span>`},
+    {k:"residual_eur",t:"Residual",f:r=>r.residual_eur==null?"—":
+      `<span class="mono ${r.residual_eur>0?"pos":"neg"}">${r.residual_eur>0?"+":""}${r.residual_eur.toFixed(2)}</span>`},
+  ]:[]),
+  {k:"total_slopes_km",t:"Slopes",f:r=>`<span class="mono">${fmt(r.total_slopes_km,0)} km</span>`},
+  {k:"snow_cover_pct_in_season",t:"Snow cover",f:r=>`<span class="mono">${fmt(r.snow_cover_pct_in_season,0)}%</span>`},
+  {k:"exclusion_reason",t:"Status",f:r=>r.is_model_ready?'<span style="color:#5eead4">ok</span>':
+      `<span style="color:#8ba0c0">${r.exclusion_reason}</span>`},
+];
+const table = sortable($("#resortTable"), cols, [], "price_eur");
+function applyFilters(){
+  const q=$("#q").value.trim().toLowerCase(), c=$("#fc").value, f=$("#fr").value;
+  let rows=D.resorts;
+  if(f==="ready") rows=rows.filter(r=>r.is_model_ready);
+  else if(f==="suspect") rows=rows.filter(r=>r.coordinates_suspect);
+  else if(f==="noprice") rows=rows.filter(r=>r.exclusion_reason==="no_price");
+  if(c) rows=rows.filter(r=>r.country===c);
+  if(q) rows=rows.filter(r=>r.resort_name.toLowerCase().includes(q));
+  table.update(rows);
+  $("#explorerNote").innerHTML = `${rows.length} resorts${rows.length>400?" (showing first 400)":""}.
+    <b>enc</b> = name damaged by the source file's cp1252 encoding;
+    <b>geo</b> = coordinates cross-checked against ERA5 elevation and rejected.
+    ${hasPred?"Residuals for model-ready resorts are in-sample — those rows trained the model.":""}`;
+}
+["input","change"].forEach(ev=>{
+  $("#q").addEventListener(ev,applyFilters); $("#fc").addEventListener(ev,applyFilters);
+  $("#fr").addEventListener(ev,applyFilters);
+});
+applyFilters();
+
+})();
+</script>
+</body>
+</html>

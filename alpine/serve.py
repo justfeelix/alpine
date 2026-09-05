@@ -44,6 +44,7 @@ from typing import Any
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .config import WAREHOUSE
@@ -430,3 +431,21 @@ def missing_price():
             for r, p in zip(rows, preds)
         ],
     }
+
+
+# ----------------------------------------------------------------------- the frontend
+# Mounted LAST, and that ordering is load-bearing. FastAPI matches routes in registration
+# order, so a StaticFiles mount at "/" declared earlier would swallow /health, /resorts and
+# everything else. Every API route above is registered first and therefore wins; the mount
+# only sees what nothing else claimed.
+#
+# `html=True` serves index.html for "/". The page then probes the relative URL `health`:
+# here that resolves to /health and answers, so the prediction panel unlocks. Published to
+# GitHub Pages it resolves to /<repo>/health and 404s, so the same file falls back to the
+# exported data.json. One page, no build step, no second frontend to keep in sync.
+#
+# `check_dir=False` because site/ does not exist until `make publish` has run, and the API
+# is perfectly useful before then — refusing to boot over a missing frontend would be a
+# worse failure than serving 404s for the page.
+_SITE = Path(__file__).resolve().parent.parent / "site"
+app.mount("/", StaticFiles(directory=_SITE, html=True, check_dir=False), name="site")

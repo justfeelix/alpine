@@ -14,8 +14,12 @@ data/cache/
 # snow.csv is 26 MB — see README for how to obtain it
 data/raw/ski-resort-data/snow.csv
 
-# Model output
+# Model output. The .joblib is a 1 MB binary rebuildable in seconds by `make model`;
+# metrics.json is the scorecard and IS tracked, so a diff shows how the numbers moved.
 models/*.joblib
+
+# NOTE: site/data.json is deliberately NOT ignored. It is what GitHub Pages deploys, and
+# committing it makes each published snapshot a reviewable diff.
 
 # dbt — target/ is build output, dbt_packages/ is vendored deps (dbt deps)
 dbt/target/

@@ -1,0 +1,81 @@
+# Publish site/ to GitHub Pages.
+#
+# ------------------------------------------------------------------------------------
+# WHY THIS DEPLOYS A COMMITTED FOLDER RATHER THAN REBUILDING THE PIPELINE
+# ------------------------------------------------------------------------------------
+# The obvious-looking version of this workflow would run the whole pipeline in CI: seed,
+# fetch weather, dbt build, train, publish. It would also be wrong here, for three reasons.
+#
+#   1. `make weather` spends about 5,400 weighted calls against Open-Meteo's free tier.
+#      Running that on every push is rude to a free public API and would get the runner
+#      rate-limited within a couple of commits.
+#   2. snow.csv is 26 MB and deliberately gitignored, so CI has nothing to seed from.
+#   3. A deploy that can fail for reasons unrelated to the deploy is a bad deploy.
+#
+# So `site/data.json` is generated locally by `make publish` and committed. That makes the
+# published numbers a reviewable artefact — a diff on data.json shows exactly what changed
+# between snapshots, which a rebuild-every-time pipeline would hide.
+#
+# ------------------------------------------------------------------------------------
+# ONE-TIME SETUP
+# ------------------------------------------------------------------------------------
+#   Settings -> Pages -> Source: "GitHub Actions"
+#
+# The repo must be public for Pages on a free account (Pro or above can publish from a
+# private repo). Nothing secret ships here — the bundle is derived from a public Kaggle
+# dataset and two public APIs — but it is worth knowing before flipping the switch.
+
+name: Deploy site to GitHub Pages
+
+on:
+  push:
+    branches: [master, main]
+    # Only redeploy when something the site actually serves has changed. A README edit
+    # should not trigger a deployment.
+    paths:
+      - "site/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:        # so a deploy can be forced from the Actions tab
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deploys race. `cancel-in-progress: false` because a half-finished Pages
+# deployment is worse than a slightly delayed one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Fail loudly and specifically if the bundle was never generated, rather than
+      # publishing a page that renders "No data bundle" to every visitor.
+      - name: Check the data bundle is present
+        run: |
+          test -f site/data.json || {
+            echo "::error::site/data.json missing — run 'make publish' and commit it"
+            exit 1
+          }
+          python -c "
+          import json
+          d = json.load(open('site/data.json'))
+          assert d['resorts'], 'no resorts in bundle'
+          assert d['metrics'], 'no metrics in bundle'
+          print(f\"{len(d['resorts'])} resorts, generated {d['generated_at']}\")
+          "
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4

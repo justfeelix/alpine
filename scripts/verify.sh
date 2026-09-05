@@ -192,6 +192,38 @@ check "cross-check: price spread across countries exceeds EUR 20" 200 \
       "max(c['avg_price_eur'] for c in d['countries']) - \
        min(c['avg_price_eur'] for c in d['countries']) > 20"
 
+# ------------------------------------------------------------------ the frontend
+echo
+echo "=== Frontend ==="
+
+# The page is served by the StaticFiles mount. These checks exist because the mount is
+# registered at "/" and route ordering decides whether it swallows the API — if a refactor
+# ever moved the mount above the endpoints, /health would start returning HTML and every
+# check above would fail confusingly. Asserting both here makes the cause obvious.
+fetch GET /
+if [[ "$CODE" == "200" ]] && echo "$BODY" | grep -q "Does snow reliability command"; then
+  green "GET / -> the page is served"
+else
+  red "GET / -> page not served (HTTP $CODE)"
+  info "run 'make publish', and check site/index.html exists"
+fi
+
+fetch GET /data.json
+check "GET /data.json -> 499 resorts, metrics attached" 200 \
+      "d['counts']['resorts']==499 and d['counts']['model_ready']==422 and d['metrics'] is not None"
+
+check "GET /data.json -> every resort has predictions" 200 \
+      "all('predicted_price_eur' in r for r in d['resorts'])"
+
+# The bundle must be self-sufficient: the static page computes the pooled and per-country
+# snow premiums from these fields, so a missing column silently empties the headline chart.
+check "GET /data.json -> the paradox chart has what it needs" 200 \
+      "sum(1 for r in d['resorts'] if r['is_model_ready'] and \
+           r['snow_cover_pct_in_season'] is not None and r['price_eur'] is not None) == 422"
+
+fetch GET /health
+check "static mount did not swallow the API" 200 "d['status']=='ok'"
+
 echo
 echo "==============================================="
 printf "  %d passed, %d failed\n" "$PASS" "$FAIL"
