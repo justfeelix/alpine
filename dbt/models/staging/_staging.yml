@@ -1,0 +1,153 @@
+version: 2
+
+# ---------------------------------------------------------------------------- sources
+# Declaring sources does three things: `{{ source() }}` replaces hardcoded table names,
+# dbt draws them at the root of the lineage graph, and freshness/tests can be attached to
+# data we did not produce.
+sources:
+  - name: raw
+    description: >
+      Landed exactly as the source gave it. Two Kaggle CSVs and one API extract. Nothing in
+      this schema has been interpreted — every decision happens in staging and below.
+    schema: raw
+    tables:
+      - name: resorts
+        description: "One row per ski resort. Kaggle: ulrikthygepedersen/ski-resorts (cp1252)."
+        columns:
+          - name: ID
+            description: "Primary key."
+            tests: [unique, not_null]
+
+      - name: snow
+        description: "NASA NEO MOD10C1 monthly snow cover, 0.25° global grid, 2022."
+
+      - name: weather
+        description: "Open-Meteo ERA5 daily archive, fetched per resort. See alpine/weather.py."
+        columns:
+          - name: resort_id
+            tests:
+              - not_null
+              - relationships:
+                  arguments:
+                    to: source('raw', 'resorts')
+                    field: ID
+
+# ----------------------------------------------------------------------------- models
+models:
+
+  - name: stg_resorts
+    description: >
+      One row per resort, typed and with missing values made honest. The zeros that mean
+      "unknown" become NULL; the zeros that are real measurements do not. See PROFILE.md §2.
+    columns:
+      - name: resort_id
+        description: "Primary key. The grain of this model is one row per resort."
+        tests: [unique, not_null]
+
+      - name: resort_name
+        tests: [not_null]
+
+      - name: country
+        tests: [not_null]
+
+      - name: continent
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['Europe', 'North America', 'South America', 'Asia', 'Oceania', 'Africa']
+
+      - name: hemisphere
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['northern', 'southern']
+
+      - name: price_eur
+        description: >
+          Lift-pass price. NULL for the 9 resorts the source recorded as 0, which is missing
+          data rather than free skiing. Currency is undocumented upstream; EUR is assumed
+          and the assumption is recorded here rather than left implicit.
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 1
+                max_value: 500
+              config:
+                severity: warn
+
+      - name: latitude
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments: {min_value: -90, max_value: 90}
+
+      - name: longitude
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments: {min_value: -180, max_value: 180}
+
+      - name: total_slopes_km
+        tests: [not_null]
+
+      - name: vertical_drop_m
+        description: "Highest minus lowest. Negative would mean the source is inverted."
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0}
+
+      - name: snow_cannons
+        description: >
+          Deliberately NOT nullified at 0. 226 resorts report zero, which for a small resort
+          is a real measurement of snow-making investment, not an absent one.
+
+  - name: stg_snow
+    description: "One row per grid cell per month. Not joined to resorts — that is business logic."
+    columns:
+      - name: snow_cover_pct
+        description: "Percentage, 0-100."
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 100}
+      - name: snow_month
+        tests: [not_null]
+
+  - name: stg_weather
+    description: >
+      One row per resort per day. Both the requested and the ERA5-grid coordinates are kept;
+      the gap between grid elevation and the resort's stated elevation is what revealed the
+      geocoding failures documented in PROFILE.md §7.
+    tests:
+      # The grain, asserted. Two rows for one resort-day would silently double every
+      # subsequent aggregate.
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [resort_id, weather_date]
+    columns:
+      - name: resort_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_resorts')
+                field: resort_id
+
+      - name: weather_date
+        tests: [not_null]
+
+      - name: temp_max_c
+        tests:
+          - not_null
+          # Wider than any resort should see, so it catches a unit change rather than weather.
+          - dbt_utils.accepted_range:
+              arguments: {min_value: -60, max_value: 55}
+
+      - name: snowfall_cm
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0}
+
+      - name: grid_elevation_m
+        tests: [not_null]

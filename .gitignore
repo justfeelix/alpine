@@ -14,7 +14,7 @@ data/cache/
 # snow.csv is 26 MB — see README for how to obtain it
 data/raw/ski-resort-data/snow.csv
 
-# dbt
+# dbt — target/ is build output, dbt_packages/ is vendored deps (dbt deps)
 dbt/target/
 dbt/dbt_packages/
 dbt/logs/

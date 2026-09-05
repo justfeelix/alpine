@@ -119,15 +119,24 @@ def _profile_resorts(con) -> None:
     print("  none" if ex.empty else ex.to_string(index=False))
 
     _h("5. Text quality — encoding damage and categoricals")
-    bad = con.execute("""
-        SELECT "ID", "Resort", "Country"
+    # Count and sample are separate queries. An earlier version used LIMIT 15 and then
+    # reported len(result) as the count — which silently capped it at 15 when the true
+    # figure was 156. A LIMIT on a diagnostic query does not cap the problem, only the
+    # evidence of it.
+    print(con.execute("""
+        SELECT count(*) FILTER (WHERE "Resort" LIKE '%?%')                     AS damaged_rows,
+               count(*) FILTER (WHERE regexp_matches("Resort",
+                                      '[a-zA-Z]\\?[a-zA-Z]'))                 AS destroyed_letter,
+               count(*) FILTER (WHERE "Resort" LIKE '%/?%'
+                                   OR "Resort" LIKE '%-?%'
+                                   OR "Resort" LIKE '% ?%')                    AS destroyed_separator
         FROM raw.resorts
-        WHERE "Resort" LIKE '%?%' OR "Country" LIKE '%?%'
-        LIMIT 15
-    """).df()
-    print(f"  rows containing '?' (mojibake): {len(bad)}")
-    if not bad.empty:
-        print(bad.to_string(index=False))
+    """).df().to_string(index=False))
+    print("\n  sample:")
+    print(con.execute("""
+        SELECT "ID", "Resort" FROM raw.resorts
+        WHERE "Resort" LIKE '%?%' ORDER BY "ID" LIMIT 8
+    """).df().to_string(index=False))
 
     print("\n  Countries:")
     print(con.execute("""

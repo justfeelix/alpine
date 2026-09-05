@@ -1,0 +1,28 @@
+name: alpine
+version: "1.0.0"
+config-version: 2
+profile: alpine
+
+model-paths: ["models"]
+test-paths: ["tests"]
+
+models:
+  alpine:
+    staging:
+      # Views: staging is cheap, and a view is always consistent with raw.
+      +materialized: view
+      +schema: staging
+    intermediate:
+      +materialized: view
+      +schema: intermediate
+    marts:
+      # Tables: marts are queried repeatedly, so materialise them.
+      +materialized: table
+      +schema: marts
+
+# Grid geometry, verified against the raw file during profiling. In vars rather than
+# hardcoded in a model, because the same two numbers appear in the Python extract layer and
+# in SQL — one definition, referenced twice, beats two definitions that agree today.
+vars:
+  snow_grid_deg: 0.25
+  snow_grid_offset: 0.125

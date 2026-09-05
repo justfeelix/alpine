@@ -26,7 +26,20 @@ latin-1. So "latin-1 nearly works" is a trap — it decodes without error and si
 | Wrong decoder | `Espace San Bernardo \x96 La Rosière` | ✅ decode as cp1252 |
 | Already destroyed upstream | `Nevados de Chilla?n`, `Val d'Ise?re` | ❌ the `?` is *in the file* |
 
-15 rows carry unrecoverable `?` damage. We flag them in staging rather than pretend to fix them.
+**156 rows** carry unrecoverable `?` damage — not 15, which is what this document said until
+the staging layer disagreed with it. The profiling query used `LIMIT 15` and then reported the
+length of the result as the count. A `LIMIT` on a diagnostic query caps the *evidence*, not the
+problem. Fixed in `profile.py`; the count and the sample are now separate queries.
+
+The damage comes in two kinds, and the distinction is useful:
+
+| kind | count | example | matters? |
+|---|---|---|---|
+| **Destroyed letter** | 88 | `Chilla?n`, `Val d'Ise?re`, `Cha?tel` | yes — the name is misspelt |
+| **Destroyed separator** | ~100 | `La Rosière/?La Thuile`, `Balme-?Les Autannes` | cosmetic — a dash or slash |
+
+`stg_resorts` flags them separately, because a misspelt resort name breaks name matching against
+any other source, while a mangled separator does not.
 
 ---
 
