@@ -39,11 +39,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from .config import WAREHOUSE
-from .model import ALL_FEATURES, MODEL_PATH, find_table
-
-SITE = Path("site")
-METRICS_PATH = Path("models/metrics.json")
+from .config import METRICS_PATH, MODEL_PATH, SITE_DATA, WAREHOUSE
+from .model import ALL_FEATURES, find_table
 
 # A projection, not SELECT *. The mart has 38 columns; the page uses these. Naming them
 # means adding a column upstream cannot silently inflate the payload every visitor
@@ -135,7 +132,7 @@ def build(warehouse: Path = WAREHOUSE) -> dict:
     }
 
 
-def publish(out: Path = SITE / "data.json") -> Path:
+def publish(out: Path = SITE_DATA) -> Path:
     bundle = build()
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(bundle, separators=(",", ":")))

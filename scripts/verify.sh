@@ -60,9 +60,13 @@ import joblib, sklearn, sys
 try:
     m = joblib.load('models/pricing_model.joblib')
 except Exception as e:
-    print(f'        {type(e).__name__}: {e}'); sys.exit(1)
-if m['sklearn_version'] != sklearn.__version__:
-    print(f\"        pickled with sklearn {m['sklearn_version']}, running {sklearn.__version__}\")
+    print(f'        {type(e).__name__}: {e}')
+    print('        the artefact was written by a different environment — retrain here')
+    sys.exit(1)
+for lib, running in (('sklearn', sklearn.__version__), ('joblib', joblib.__version__)):
+    was = m.get(f'{lib}_version')
+    if was and was != running:
+        print(f'        WARN pickled with {lib} {was}, running {running}')
 print(f\"        {len(m['features'])} features, {m['n_training_rows']} training rows\")
 " \
   && green "model loads under the installed scikit-learn" \

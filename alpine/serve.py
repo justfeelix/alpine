@@ -47,10 +47,8 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .config import WAREHOUSE
-from .model import ALL_FEATURES, MODEL_PATH, find_table
-
-METRICS_PATH = Path("models/metrics.json")
+from .config import METRICS_PATH, MODEL_PATH, SITE, WAREHOUSE
+from .model import ALL_FEATURES, find_table
 
 # Filled by the lifespan handler. Module-level rather than passed around because there is
 # exactly one of each per process and FastAPI has no better place to put them.
@@ -447,5 +445,4 @@ def missing_price():
 # `check_dir=False` because site/ does not exist until `make publish` has run, and the API
 # is perfectly useful before then — refusing to boot over a missing frontend would be a
 # worse failure than serving 404s for the page.
-_SITE = Path(__file__).resolve().parent.parent / "site"
-app.mount("/", StaticFiles(directory=_SITE, html=True, check_dir=False), name="site")
+app.mount("/", StaticFiles(directory=SITE, html=True, check_dir=False), name="site")

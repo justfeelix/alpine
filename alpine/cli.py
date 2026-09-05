@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 
+from .config import METRICS_PATH, SITE_DATA
+
 
 def cmd_seed(_):
     from .seed import load_seed
@@ -32,6 +34,27 @@ def cmd_publish(args):
     publish(out=Path(args.out))
 
 
+def cmd_pipeline(_):
+    """The whole pipeline in order, for people who do not want an orchestrator.
+
+    Exists so the Airflow DAG has an obvious non-Airflow equivalent — and so the DAG can
+    be described honestly as scheduling and retrying *these* steps rather than as the
+    thing that defines them.
+    """
+    from .model import run
+    from .publish import publish
+    from .seed import load_seed
+    from .weather import load_weather
+    import subprocess
+    from .config import DBT_DIR
+
+    load_seed()
+    load_weather()
+    subprocess.run(["dbt", "build"], cwd=DBT_DIR, check=True)
+    run()
+    publish()
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="alpine",
                                 description="Ski-resort pricing & snow analytics pipeline")
@@ -49,12 +72,15 @@ def build_parser() -> argparse.ArgumentParser:
     w.set_defaults(func=cmd_weather)
 
     m = sub.add_parser("model", help="Baselines, models, and the snow ablation")
-    m.add_argument("--out", default="models/metrics.json")
+    m.add_argument("--out", default=str(METRICS_PATH))
     m.set_defaults(func=cmd_model)
 
     pub = sub.add_parser("publish", help="Export the marts to site/data.json")
-    pub.add_argument("--out", default="site/data.json")
+    pub.add_argument("--out", default=str(SITE_DATA))
     pub.set_defaults(func=cmd_publish)
+
+    pl = sub.add_parser("pipeline", help="Run every step in order")
+    pl.set_defaults(func=cmd_pipeline)
     return p
 
 

@@ -43,7 +43,7 @@ from sklearn.model_selection import KFold, cross_val_predict, cross_val_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-from .config import WAREHOUSE
+from .config import METRICS_PATH, MODEL_PATH, WAREHOUSE
 
 TARGET = "price_eur"
 SEED = 42
@@ -274,9 +274,6 @@ def feature_importance(df: pd.DataFrame, n_repeats: int = 10) -> pd.DataFrame:
 
 
 # --------------------------------------------------------------------- the final fit
-MODEL_PATH = Path("models/pricing_model.joblib")
-
-
 def train_final(df: pd.DataFrame, path: Path = MODEL_PATH) -> Path:
     """Refit the chosen pipeline on ALL model-ready rows and persist it for the API.
 
@@ -299,9 +296,15 @@ def train_final(df: pd.DataFrame, path: Path = MODEL_PATH) -> Path:
     pipe.fit(df[ALL_FEATURES], df[TARGET])
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    # Version-stamped, because a pickle is only loadable by a compatible scikit-learn and a
-    # silent version mismatch is a genuinely painful failure to diagnose. Recording what
-    # produced it turns "it crashes on load" into "you are on a different sklearn".
+    # Version-stamped, because a pickle is only loadable by a compatible environment and a
+    # silent mismatch is a genuinely painful failure to diagnose. Recording what produced
+    # it turns "it crashes on load" into "you are on a different library version".
+    #
+    # BOTH versions, and joblib is not the paranoid one — it is the one that actually bit.
+    # Running `train` from Airflow's virtualenv (joblib 1.6.0) produced an artefact that
+    # the project venv (joblib 1.5.3) could not read: `ModuleNotFoundError: No module named
+    # 'dill'`. Identical scikit-learn on both sides, so a sklearn-only stamp would have
+    # reported everything as fine while the API returned 500s.
     import sklearn
     joblib.dump({
         "pipeline": pipe,
@@ -309,12 +312,13 @@ def train_final(df: pd.DataFrame, path: Path = MODEL_PATH) -> Path:
         "target": TARGET,
         "n_training_rows": int(len(df)),
         "sklearn_version": sklearn.__version__,
+        "joblib_version": joblib.__version__,
     }, path)
     return path
 
 
 # ------------------------------------------------------------------------------- run
-def run(save_to: str | None = None) -> dict:
+def run(save_to: str | Path | None = METRICS_PATH) -> dict:
     df = load()
     print(f"Model-ready resorts: {len(df)}  "
           f"(target: EUR {df[TARGET].min():.0f}-{df[TARGET].max():.0f}, "
@@ -368,6 +372,7 @@ def run(save_to: str | None = None) -> dict:
         "top_features": imp.head(10).to_dict("records"),
     }
     if save_to:
+        Path(save_to).parent.mkdir(parents=True, exist_ok=True)
         with open(save_to, "w") as f:
             json.dump(summary, f, indent=2, default=float)
         print(f"\nSaved -> {save_to}")

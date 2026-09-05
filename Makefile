@@ -1,4 +1,4 @@
-.PHONY: setup seed profile weather build model publish serve verify test clean
+.PHONY: setup seed profile weather build model publish serve verify airflow pipeline test clean
 
 setup:
 	pip install -r requirements.txt
@@ -32,6 +32,18 @@ serve:
 ## Step 10 — end-to-end: prerequisites, then every endpoint against a real server
 verify:
 	bash scripts/verify.sh
+
+## Every step in order, without an orchestrator. The DAG's non-Airflow equivalent.
+pipeline:
+	python -m alpine.cli pipeline
+
+## Step 10.5 — Airflow, all components in one process, state kept inside the repo.
+##             LOAD_EXAMPLES=False or ~50 tutorial DAGs bury this one in the UI.
+##             Needs .venv-airflow — see airflow/README.md.
+airflow:
+	AIRFLOW_HOME=$(CURDIR)/airflow \
+	AIRFLOW__CORE__LOAD_EXAMPLES=False \
+	.venv-airflow/bin/airflow standalone
 
 test:
 	python -m pytest -q
