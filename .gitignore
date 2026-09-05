@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.env
+
+# Warehouse — rebuildable from source, and large
+data/warehouse.duckdb
+data/warehouse.duckdb.wal
+
+# API response cache
+data/cache/
+
+# snow.csv is 26 MB — see README for how to obtain it
+data/raw/ski-resort-data/snow.csv
+
+# dbt
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/

@@ -1,0 +1,21 @@
+# Warehouse
+duckdb>=1.0
+
+# Extract
+httpx>=0.27
+
+# Transform (dbt)
+dbt-core>=1.8
+dbt-duckdb>=1.8
+
+# Analysis & modelling
+pandas>=2.2
+numpy>=1.26
+scikit-learn>=1.4
+
+# Serve
+fastapi>=0.110
+uvicorn[standard]>=0.27
+
+# Tests
+pytest>=7.0
