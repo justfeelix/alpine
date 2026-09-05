@@ -53,16 +53,39 @@ from .config import CACHE
 
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 
+# Three variables, not four. `precipitation_sum` was dropped deliberately: see
+# `estimate_weight()` below — variables are a direct multiplier on API cost, and the
+# question this project asks is about *snow*. Paying 25% of the budget for rainfall we
+# would not use is a bad trade.
 DAILY_VARS = [
     "temperature_2m_max",
     "temperature_2m_min",
     "snowfall_sum",
-    "precipitation_sum",
 ]
 
-# 60 fits comfortably in a URL and returns ~260 KB. Larger batches risk hitting URL length
-# limits at some proxy we don't control, for no real gain — 9 calls is already trivial.
-BATCH_SIZE = 60
+# Open-Meteo's variable name -> our column name. The parser iterates DAILY_VARS and looks
+# each one up here, so adding or removing a variable changes exactly one list and the
+# output follows. An earlier version hardcoded the columns in the parser; dropping
+# `precipitation_sum` from the request then left the parser reading a key that no longer
+# existed, and the tests did not catch it because the recorded fixture still contained the
+# old variable. Deriving the columns from the request makes that class of drift impossible.
+VAR_COLUMNS = {
+    "temperature_2m_max": "temp_max_c",
+    "temperature_2m_min": "temp_min_c",
+    "snowfall_sum":       "snowfall_cm",
+    "precipitation_sum":  "precipitation_mm",
+    "snow_depth_max":     "snow_depth_m",
+}
+
+# 20, not 60. Open-Meteo bills by data volume, not by HTTP request — see estimate_weight().
+# At 365 days x 3 variables, 20 locations costs ~162 weighted calls, comfortably under the
+# 600/minute limit. 60 locations cost ~486 and left no room for anything else.
+BATCH_SIZE = 20
+
+# Rate limits on the free tier, from Open-Meteo's pricing page.
+LIMIT_PER_MINUTE = 600
+LIMIT_PER_HOUR = 5_000
+LIMIT_PER_DAY = 10_000
 
 RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}
 
@@ -73,6 +96,31 @@ class Location:
     resort_id: int
     latitude: float
     longitude: float
+
+
+def estimate_weight(n_locations: int, n_days: int,
+                    n_variables: int = len(DAILY_VARS)) -> float:
+    """Estimate how many *weighted* API calls a request costs.
+
+    Open-Meteo does not count HTTP requests — it counts data volume:
+
+        weight ~= ceil(days / 14) * (variables / 10) * locations
+
+    Days are charged in 14-day chunks because that is how the data is stored: returning one
+    day costs the server the same as returning fourteen. Variables and locations multiply.
+
+    This matters more than it looks. The obvious optimisation — "batch 60 resorts into one
+    request instead of 60 requests" — reduces HTTP overhead but **does not reduce cost at
+    all**, because the same volume is being asked for either way. Batching only controls how
+    much you spend per minute.
+
+    Worked example, and the reason this function exists: 60 locations x 365 days x 4
+    variables = ceil(365/14) * 0.4 * 60 ~= 624 weighted calls, against a limit of 600 per
+    minute. The first request consumed the entire minute's budget and the second was
+    rejected with a 429.
+    """
+    import math
+    return math.ceil(n_days / 14) * (n_variables / 10) * n_locations
 
 
 # --------------------------------------------------------------------------- transport
@@ -87,7 +135,7 @@ def fetch_batch(locations: list[Location], start: str, end: str, *,
                 client: httpx.Client | None = None,
                 use_cache: bool = True,
                 max_retries: int = 4,
-                pause_s: float = 1.0) -> list[dict]:
+                pause_s: float = 8.0) -> list[dict]:
     """Fetch one batch of locations. Returns the raw JSON array, unmodified."""
     lats = ",".join(f"{loc.latitude:.4f}" for loc in locations)
     lons = ",".join(f"{loc.longitude:.4f}" for loc in locations)
@@ -114,10 +162,26 @@ def fetch_batch(locations: list[Location], start: str, end: str, *,
                 r = client.get(ARCHIVE_URL, params=params)
 
                 if r.status_code in RETRYABLE_STATUS:
-                    # Honour Retry-After when the server tells us; otherwise back off.
-                    wait = float(r.headers.get("Retry-After", 2 ** attempt))
+                    # 429 is a *rate* limit, and Open-Meteo's tightest window is per minute.
+                    # Backing off 1-2-4-8 seconds — which is right for a flaky connection —
+                    # is useless here: it exhausts the retries inside the same minute that is
+                    # already over quota. Wait out the window instead.
+                    if r.status_code == 429:
+                        wait = float(r.headers.get("Retry-After", 65))
+                    else:
+                        wait = float(r.headers.get("Retry-After", 2 ** attempt))
+
+                    detail = ""
+                    try:
+                        detail = r.json().get("reason", "")
+                    except Exception:  # noqa: BLE001
+                        pass
+                    print(f"    HTTP {r.status_code} {detail} - waiting {wait:.0f}s "
+                          f"(attempt {attempt + 1}/{max_retries})", flush=True)
+
                     last_error = httpx.HTTPStatusError(
-                        f"HTTP {r.status_code}", request=r.request, response=r)
+                        f"HTTP {r.status_code} {detail}".strip(),
+                        request=r.request, response=r)
                     time.sleep(wait)
                     continue
 
@@ -147,7 +211,11 @@ def fetch_batch(locations: list[Location], start: str, end: str, *,
                 time.sleep(2 ** attempt)
 
         raise RuntimeError(
-            f"Open-Meteo failed after {max_retries} attempts: {last_error}") from last_error
+            f"Open-Meteo failed after {max_retries} attempts: {last_error}\n"
+            f"Completed batches are cached, so re-running resumes rather than restarting. "
+            f"If this keeps happening, lower BATCH_SIZE or shorten the date range — "
+            f"see estimate_weight()."
+        ) from last_error
     finally:
         if owned:
             client.close()
@@ -168,9 +236,16 @@ def parse_batch(payload: list[dict], locations: list[Location]) -> list[dict]:
     rows: list[dict] = []
     for loc, obj in zip(locations, payload):
         daily = obj["daily"]
-        times = daily["time"]
-        for i, day in enumerate(times):
-            rows.append({
+
+        missing = [v for v in DAILY_VARS if v not in daily]
+        if missing:
+            raise ValueError(
+                f"Response is missing requested variables: {missing}. "
+                f"Got {sorted(k for k in daily if k != 'time')}. "
+                "The request and the parser have diverged.")
+
+        for i, day in enumerate(daily["time"]):
+            row = {
                 "resort_id": loc.resort_id,
                 "weather_date": day,
                 # what we asked for
@@ -181,11 +256,10 @@ def parse_batch(payload: list[dict], locations: list[Location]) -> list[dict]:
                 "grid_longitude": obj["longitude"],
                 "grid_elevation_m": obj.get("elevation"),
                 "timezone": obj.get("timezone"),
-                "temp_max_c": daily["temperature_2m_max"][i],
-                "temp_min_c": daily["temperature_2m_min"][i],
-                "snowfall_cm": daily["snowfall_sum"][i],
-                "precipitation_mm": daily["precipitation_sum"][i],
-            })
+            }
+            for var in DAILY_VARS:
+                row[VAR_COLUMNS[var]] = daily[var][i]
+            rows.append(row)
     return rows
 
 
@@ -229,6 +303,8 @@ def locations_from_warehouse(con) -> list[Location]:
 def load_weather(con=None, start: str = DEFAULT_START, end: str = DEFAULT_END,
                  **kwargs) -> int:
     """Fetch weather for every resort and land it in `raw.weather`. Idempotent."""
+    from datetime import date
+
     import pandas as pd
 
     from .seed import connect
@@ -237,8 +313,26 @@ def load_weather(con=None, start: str = DEFAULT_START, end: str = DEFAULT_END,
     con = con or connect()
     try:
         locations = locations_from_warehouse(con)
-        print(f"Fetching {start} to {end} for {len(locations)} resorts "
-              f"({-(-len(locations) // BATCH_SIZE)} requests)")
+
+        n_days = (date.fromisoformat(end) - date.fromisoformat(start)).days + 1
+        n_batches = -(-len(locations) // BATCH_SIZE)
+        per_call = estimate_weight(BATCH_SIZE, n_days)
+        total = estimate_weight(len(locations), n_days)
+
+        print(f"Fetching {start} to {end} ({n_days} days) for {len(locations)} resorts")
+        print(f"  {n_batches} requests of {BATCH_SIZE} locations, "
+              f"{len(DAILY_VARS)} variables")
+        print(f"  estimated cost: {per_call:.0f} weighted calls each, "
+              f"{total:.0f} total")
+        print(f"  free-tier limits: {LIMIT_PER_MINUTE}/min, {LIMIT_PER_HOUR}/hour, "
+              f"{LIMIT_PER_DAY}/day")
+        if per_call >= LIMIT_PER_MINUTE:
+            raise ValueError(
+                f"A single request would cost {per_call:.0f} weighted calls against a "
+                f"{LIMIT_PER_MINUTE}/min limit. Lower BATCH_SIZE or shorten the range.")
+        if total >= LIMIT_PER_HOUR:
+            print(f"  WARNING: total exceeds the hourly limit; expect to wait it out.")
+        print()
 
         rows = fetch_all(locations, start, end, **kwargs)
         df = pd.DataFrame(rows)

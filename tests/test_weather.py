@@ -94,10 +94,45 @@ def test_length_mismatch_refuses_to_guess(payload):
 def test_values_are_passed_through_unchanged(payload):
     rows = parse_batch(payload, LOCATIONS)
     hemsedal_day1 = rows[0]
-    assert hemsedal_day1["weather_date"] == "2024-01-01"
-    assert hemsedal_day1["temp_max_c"] == -11.6
-    assert hemsedal_day1["snowfall_cm"] == 3.57
-    assert hemsedal_day1["precipitation_mm"] == 5.10
+    assert hemsedal_day1["weather_date"] == "2022-01-01"
+    assert hemsedal_day1["temp_max_c"] == -0.3
+    assert hemsedal_day1["snowfall_cm"] == 4.06
+
+
+def test_fixture_matches_what_we_actually_request(payload):
+    """Guards against the fixture drifting away from the live request.
+
+    This is the test that was missing. `precipitation_sum` was removed from DAILY_VARS but
+    the recorded fixture still contained it, so the parser kept reading a key that the real
+    API no longer returned — green tests, broken pipeline.
+    """
+    from alpine.weather import DAILY_VARS
+
+    returned = {k for k in payload[0]["daily"] if k != "time"}
+    assert returned == set(DAILY_VARS), (
+        f"fixture has {sorted(returned)}, code requests {sorted(DAILY_VARS)} — "
+        "re-capture the fixture after changing DAILY_VARS")
+
+
+def test_parser_output_columns_follow_the_request(payload):
+    """Columns are derived from DAILY_VARS, not hardcoded, so they cannot diverge."""
+    from alpine.weather import DAILY_VARS, VAR_COLUMNS
+
+    row = parse_batch(payload, LOCATIONS)[0]
+    for var in DAILY_VARS:
+        assert VAR_COLUMNS[var] in row
+    # precipitation is not requested any more, so it must not appear
+    assert "precipitation_mm" not in row
+
+
+def test_missing_variable_in_response_fails_loudly(payload):
+    """If the API stops returning something we asked for, say so — don't KeyError."""
+    import copy
+    broken = copy.deepcopy(payload)
+    del broken[0]["daily"]["snowfall_sum"]
+
+    with pytest.raises(ValueError, match="missing requested variables"):
+        parse_batch(broken, LOCATIONS)
 
 
 # --------------------------------------------------------------------------- transport
@@ -159,3 +194,68 @@ def test_cache_prevents_a_second_network_call(payload, tmp_path, monkeypatch):
                          client=client, use_cache=True, pause_s=0)
     assert first == second
     assert len(list(tmp_path.glob("openmeteo_*.json"))) == 1
+
+
+# ------------------------------------------------------------------------ cost model
+def test_weight_estimate_matches_the_failure_we_actually_hit():
+    """The original settings really did exceed the per-minute limit — this pins that down.
+
+    60 locations x 365 days x 4 variables was the first attempt. It cost more than the
+    600/minute allowance in a single request, which is exactly what happened: batch 1
+    succeeded, batch 2 came back 429.
+    """
+    from alpine.weather import LIMIT_PER_MINUTE, estimate_weight
+
+    original = estimate_weight(n_locations=60, n_days=365, n_variables=4)
+    assert original > LIMIT_PER_MINUTE, "the original settings must be shown to fail"
+
+    current = estimate_weight(n_locations=20, n_days=365, n_variables=3)
+    assert current < LIMIT_PER_MINUTE / 2, "current settings must leave real headroom"
+
+
+def test_total_job_fits_inside_the_hourly_limit():
+    from alpine.weather import LIMIT_PER_HOUR, estimate_weight
+
+    total = estimate_weight(n_locations=499, n_days=365, n_variables=3)
+    assert total < LIMIT_PER_HOUR, f"whole job costs {total:.0f}, limit is {LIMIT_PER_HOUR}"
+
+
+def test_days_are_charged_in_fourteen_day_chunks():
+    """One day costs the same as fourteen — the server decompresses the same chunk."""
+    from alpine.weather import estimate_weight
+
+    assert estimate_weight(1, 1) == estimate_weight(1, 14)
+    assert estimate_weight(1, 15) > estimate_weight(1, 14)
+
+
+def test_429_waits_out_the_minute_not_a_couple_of_seconds(payload, monkeypatch):
+    """Regression test for the bug this step actually hit.
+
+    Exponential backoff of 1-2-4-8s is right for a flaky connection and wrong for a rate
+    limit: it burns every retry inside the same minute that is already over quota.
+    """
+    slept: list[float] = []
+    monkeypatch.setattr("alpine.weather.time.sleep", slept.append)
+
+    client = _client_returning(
+        httpx.Response(429, json={"reason": "Minutely API request limit exceeded"}),
+        httpx.Response(200, json=payload),
+    )
+    fetch_batch(LOCATIONS, "2024-01-01", "2024-01-04",
+                client=client, use_cache=False, pause_s=0)
+
+    assert slept and max(slept) >= 60, (
+        f"a 429 must wait out the rate-limit window; longest sleep was {max(slept)}s")
+
+
+def test_retry_after_header_is_honoured(payload, monkeypatch):
+    slept: list[float] = []
+    monkeypatch.setattr("alpine.weather.time.sleep", slept.append)
+
+    client = _client_returning(
+        httpx.Response(429, headers={"Retry-After": "17"}),
+        httpx.Response(200, json=payload),
+    )
+    fetch_batch(LOCATIONS, "2024-01-01", "2024-01-04",
+                client=client, use_cache=False, pause_s=0)
+    assert 17 in slept, "the server's own Retry-After must win over our default"
