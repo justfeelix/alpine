@@ -1,0 +1,161 @@
+version: 2
+
+models:
+
+  # ------------------------------------------------------------------- season parsing
+  - name: int_resort_season
+    description: >
+      The free-text `Season` column parsed into start/end months. Four formats, not one:
+      range, single month, `Year-round`, `Unknown`. 435 of 499 seasons cross the year
+      boundary, where a naive `month BETWEEN start AND end` matches nothing at all.
+    tests:
+      - row_count_matches:
+          arguments:
+            compare_model: ref('stg_resorts')
+    columns:
+      - name: resort_id
+        tests: [unique, not_null]
+
+      - name: season_format
+        description: "Which of the four shapes this resort's season string had."
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['range', 'single_month', 'year_round', 'unknown']
+          # If every row landed in one bucket the classifier has collapsed — which
+          # not_null and accepted_values would both happily pass.
+          - not_constant
+
+      - name: season_start_month
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 1, max_value: 12}
+
+      - name: season_end_month
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 1, max_value: 12}
+
+      - name: season_length_months
+        description: >
+          Wrap-aware. December-April is 5 months, not -8. A negative value here means the
+          wrap arithmetic has broken.
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 1, max_value: 12}
+
+      - name: season_wraps_year
+        # Must find both wrapping and non-wrapping seasons. If this went constant, either
+        # the parser broke or the data changed shape — both worth knowing about.
+        tests: [not_constant]
+
+  # -------------------------------------------------------------------- spatial join
+  - name: int_resort_snow_cells
+    description: >
+      Each resort snapped to its 0.25° snow grid cell. **Must stay one row per resort.**
+      86 cells contain more than one resort, so joining in the other direction would fan
+      out; the raster is aggregated to one row per cell before the join so that it cannot.
+    tests:
+      # THE FAN-OUT CANARY. This is the test the whole model is arranged around: if the
+      # spatial join ever multiplies rows, the count diverges from stg_resorts and the
+      # build fails here rather than in a dashboard three weeks later.
+      - row_count_matches:
+          arguments:
+            compare_model: ref('stg_resorts')
+    columns:
+      - name: resort_id
+        description: "Unique — the grain contract this model exists to preserve."
+        tests: [unique, not_null]
+
+      - name: cell_latitude
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments: {min_value: -90, max_value: 90}
+
+      - name: cell_longitude
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments: {min_value: -180, max_value: 180}
+
+      - name: has_snow_data
+        description: "False for the 22 resorts whose cell is absent from the NEO product."
+        tests: [not_constant]
+
+  # ------------------------------------------------------------- coordinate validation
+  - name: int_resort_coordinate_quality
+    description: >
+      Cross-validates the source's coordinates against ERA5 grid elevation. Catches the 38
+      geocoding failures documented in PROFILE.md §7 — errors invisible to any check run
+      against the source file alone.
+    tests:
+      - row_count_matches:
+          arguments:
+            compare_model: ref('stg_resorts')
+    columns:
+      - name: resort_id
+        tests: [unique, not_null]
+
+      - name: coordinate_quality
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['plausible', 'suspect', 'almost_certainly_wrong', 'no_weather_data']
+          - not_constant
+
+      - name: coordinates_suspect
+        description: "True where the stated base exceeds the grid cell by >500 m."
+        tests: [not_constant]
+
+  # ------------------------------------------------------------------ snow reliability
+  - name: int_snow_reliability
+    description: >
+      Snow cover per resort, measured only across that resort's own season — so a southern
+      resort is judged on June-September, not on a northern winter.
+    columns:
+      - name: resort_id
+        tests: [unique, not_null]
+
+      - name: snow_cover_pct_in_season
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 100}
+
+      - name: pct_season_months_above_50
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 100}
+
+      - name: months_in_season
+        description: "Months of 2022 snow data falling inside this resort's season."
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 12}
+
+  # ------------------------------------------------------------- in-season weather
+  - name: int_resort_weather_season
+    description: >
+      Daily weather aggregated across each resort's own season. Uses the same
+      `is_month_in_season` macro as int_snow_reliability — two models computing "in season"
+      separately is how they begin to disagree.
+    columns:
+      - name: resort_id
+        tests: [unique, not_null]
+
+      - name: season_days
+        description: "Days of 2022 inside this resort's season. Cannot exceed the year."
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 366}
+
+      - name: pct_season_days_freezing
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 100}
+
+      - name: season_snowfall_cm
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0}

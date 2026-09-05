@@ -26,3 +26,8 @@ models:
 vars:
   snow_grid_deg: 0.25
   snow_grid_offset: 0.125
+
+  # Metres by which a resort's stated base may exceed its ERA5 grid cell before the
+  # coordinates are treated as suspect. Heuristic, validated against five resorts whose
+  # real locations are independently verifiable. See PROFILE.md section 7.
+  elevation_gap_threshold_m: 500
