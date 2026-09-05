@@ -1,0 +1,103 @@
+version: 2
+
+models:
+
+  - name: dim_resort
+    description: >
+      One row per resort — the descriptive dimension. All 499 resorts, including those with
+      quality problems; the flags travel with the row so a consumer sees the caveat without
+      having to know it exists.
+    tests:
+      - row_count_matches:
+          arguments:
+            compare_model: ref('stg_resorts')
+    columns:
+      - name: resort_id
+        description: "Primary key."
+        tests: [unique, not_null]
+      - name: resort_name
+        tests: [not_null]
+      - name: country
+        tests: [not_null]
+      - name: pct_difficult_terrain
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 100}
+      - name: pct_beginner_terrain
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 100}
+      - name: price_per_piste_km
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0}
+      - name: coordinate_quality
+        tests: [not_constant]
+
+  - name: fct_resort_weather_daily
+    description: >
+      One row per resort per day, 2022. The additive fact table; dim_resort joins onto it
+      many-to-one, which is the safe direction.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [resort_id, weather_date]
+      # Grain stated as an absolute: 499 resorts x 365 days. If either changes, this fails
+      # and forces the question rather than letting a silent gap through.
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "1 = 1"
+    columns:
+      - name: resort_day_key
+        description: "Surrogate key over (resort_id, weather_date)."
+        tests: [unique, not_null]
+      - name: resort_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_resort')
+                field: resort_id
+      - name: is_in_season
+        description: "Whether this day falls in the resort's own season. Must vary."
+        tests: [not_constant]
+
+  - name: mart_resort_pricing
+    description: >
+      The modelling table. One row per resort with the target, every feature, and explicit
+      eligibility flags. Weather-derived columns are NULL where the coordinates are suspect
+      — a confident number about the wrong location is more dangerous than a missing one.
+    tests:
+      - row_count_matches:
+          arguments:
+            compare_model: ref('stg_resorts')
+    columns:
+      - name: resort_id
+        tests: [unique, not_null]
+
+      - name: price_eur
+        description: "The target. NULL for 9 resorts; those cannot train but can be scored."
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 1, max_value: 500}
+
+      - name: is_model_ready
+        description: >
+          Has a price, coordinates that point at the right mountain, snow coverage and a
+          known season. Must contain both values — if every row were excluded, or none,
+          something upstream has broken.
+        tests: [not_null, not_constant]
+
+      - name: exclusion_reason
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['ok', 'no_price', 'suspect_coordinates', 'unknown_season',
+                         'no_snow_coverage', 'no_in_season_snow_data',
+                         'no_in_season_weather']
+
+      - name: snow_cover_pct_in_season
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 100}

@@ -22,7 +22,8 @@ models:
           - not_null
           - accepted_values:
               arguments:
-                values: ['range', 'single_month', 'year_round', 'unknown']
+                values: ['range', 'single_month', 'year_round', 'unknown',
+                         'multi_range']
           # If every row landed in one bucket the classifier has collapsed — which
           # not_null and accepted_values would both happily pass.
           - not_constant

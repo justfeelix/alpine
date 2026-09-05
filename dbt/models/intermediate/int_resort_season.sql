@@ -8,14 +8,24 @@
 -- The source stores the season as a human-readable string, and profiling found four
 -- different shapes, not one:
 --
---     "December - April"   220 rows   a range, and it WRAPS the year boundary
---     "June - October"      10 rows   a range that does not wrap (southern hemisphere)
---     "April"                5 rows   a single month, no dash
---     "Year-round"           4 rows   not a range at all
---     "Unknown"             27 rows   no data
+--     "December - April"                      453 rows  a range, and it WRAPS the year
+--     "April"                                  11 rows  a single month, no dash
+--     "Unknown"                                27 rows  no data
+--     "Year-round"                              4 rows  not a range at all
+--     "November - May, June - August"           4 rows  MULTIPLE ranges, comma-separated
 --
--- A naive `split_part(season, ' - ', 1)` handles the first two and quietly produces
+-- A naive `split_part(season, ' - ', 1)` handles the first shape and quietly produces
 -- nonsense for the rest.
+--
+-- The fifth shape was missed on the first pass, because the profiling query that listed
+-- season values used `LIMIT 12` and four rows did not make the cut. The singular test
+-- `assert_model_ready_rows_are_complete` caught it downstream: four resorts claimed a
+-- known season and matched zero months. Second time a LIMIT on an exploratory query has
+-- concealed a category of data in this project — the pattern is worth naming.
+--
+-- Multi-range resorts are glacier operations with a winter season and a summer one. We
+-- take the FIRST range as the primary season (the winter one, in every case here) and
+-- flag that additional periods exist, rather than silently discarding them.
 --
 -- --------------------------------------------------------------------------------------
 -- THE TRAP THAT MAKES THIS INTERESTING
@@ -44,11 +54,18 @@ classified as (
         hemisphere,
         season_raw,
 
+        -- Normalise first: everything before the first comma is the primary season. This
+        -- turns the five shapes into four, and every downstream CASE gets simpler.
+        trim(split_part(season_raw, ',', 1)) as season_primary,
+
+        season_raw like '%,%' as has_additional_periods,
+
         case
-            when season_raw = 'Unknown'                then 'unknown'
-            when season_raw = 'Year-round'             then 'year_round'
-            when season_raw like '% - %'               then 'range'
-            else                                            'single_month'
+            when season_raw = 'Unknown'                          then 'unknown'
+            when season_raw = 'Year-round'                       then 'year_round'
+            when season_raw like '%,%'                           then 'multi_range'
+            when trim(split_part(season_raw, ',', 1)) like '% - %' then 'range'
+            else                                                      'single_month'
         end as season_format
 
     from resorts
@@ -61,20 +78,26 @@ parsed as (
         resort_id,
         hemisphere,
         season_raw,
+        season_primary,
+        has_additional_periods,
         season_format,
 
-        case season_format
-            when 'year_round' then 1
-            when 'unknown'    then null
-            when 'range'      then {{ month_name_to_number("trim(split_part(season_raw, ' - ', 1))") }}
-            else                   {{ month_name_to_number("trim(season_raw)") }}
+        -- Parsing runs off `season_primary`, not `season_raw`, so multi-range rows are
+        -- handled by the same two branches as everything else.
+        case
+            when season_format = 'year_round' then 1
+            when season_format = 'unknown'    then null
+            when season_primary like '% - %'
+                then {{ month_name_to_number("trim(split_part(season_primary, ' - ', 1))") }}
+            else     {{ month_name_to_number("trim(season_primary)") }}
         end as season_start_month,
 
-        case season_format
-            when 'year_round' then 12
-            when 'unknown'    then null
-            when 'range'      then {{ month_name_to_number("trim(split_part(season_raw, ' - ', 2))") }}
-            else                   {{ month_name_to_number("trim(season_raw)") }}
+        case
+            when season_format = 'year_round' then 12
+            when season_format = 'unknown'    then null
+            when season_primary like '% - %'
+                then {{ month_name_to_number("trim(split_part(season_primary, ' - ', 2))") }}
+            else     {{ month_name_to_number("trim(season_primary)") }}
         end as season_end_month
 
     from classified
@@ -85,6 +108,8 @@ select
     resort_id,
     hemisphere,
     season_raw,
+    season_primary,
+    has_additional_periods,
     season_format,
     season_start_month,
     season_end_month,
@@ -101,6 +126,10 @@ select
         else 12 - season_start_month + season_end_month + 1
     end as season_length_months,
 
-    season_start_month is not null as has_known_season
+    -- BOTH ends, not just the start. Requiring only `season_start_month is not null` let
+    -- the four multi-range resorts through with a NULL end month, so they claimed a known
+    -- season and then matched zero months.
+    season_start_month is not null
+        and season_end_month is not null as has_known_season
 
 from parsed
